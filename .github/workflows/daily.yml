@@ -1,0 +1,38 @@
+name: YouTube Gem Daily Digest
+
+on:
+  schedule:
+    - cron: "0 2 * * *"  # 10:00 HKT = 02:00 UTC — adjust for your timezone
+  workflow_dispatch:      # manual trigger
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Install gemini-cli
+        run: |
+          git clone https://github.com/lesterppo/hermes-gem-cli.git /tmp/gem-cli
+          ln -sf /tmp/gem-cli/gemini-cli.py /usr/local/bin/gemini-cli
+          pip install gemini-webapi browser-cookie3 loguru
+
+      - name: Run digest
+        env:
+          GEMINI_SID: ${{ secrets.GEMINI_SID }}
+          GEMINI_TS: ${{ secrets.GEMINI_TS }}
+          YT_GEM_GEMINI_GEM_ID: ${{ secrets.YT_GEM_GEMINI_GEM_ID }}
+          YT_GEM_SMTP_USER: ${{ secrets.YT_GEM_SMTP_USER }}
+          YT_GEM_SMTP_PASS: ${{ secrets.YT_GEM_SMTP_PASS }}
+          YT_GEM_RECIPIENT: ${{ secrets.YT_GEM_RECIPIENT }}
+        run: python yt_gem_daily.py

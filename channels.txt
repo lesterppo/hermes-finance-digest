@@ -1,0 +1,10 @@
+# YouTube channels to monitor — one YouTube URL per line
+# Lines starting with # are comments/ignored.
+# Extract the @handle from any YouTube channel URL.
+
+# Example finance channels (replace with your own):
+# https://www.youtube.com/@YourChannel1
+# https://www.youtube.com/@YourChannel2
+
+https://www.youtube.com/@MeiTouNews
+https://www.youtube.com/@bellafinance

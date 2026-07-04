@@ -1,0 +1,13 @@
+# Credentials
+.env
+*.auth.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Runtime state
+/tmp/gem_video_*.md
+*.egg-info/
