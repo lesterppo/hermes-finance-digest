@@ -2,7 +2,7 @@ name: YouTube Gem Daily Digest
 
 on:
   schedule:
-    - cron: "0 2 * * *"  # 10:00 HKT = 02:00 UTC — adjust for your timezone
+    - cron: "0 2 * * *"  # 10:00 HKT = 02:00 UTC
   workflow_dispatch:
 
 jobs:
@@ -21,11 +21,11 @@ jobs:
           pip install -r requirements.txt
           pip install gemini-webapi browser-cookie3 loguru
 
-      - name: Setup gemini-cli
+      - name: Setup gem-cli
         run: |
           mkdir -p ~/.local/bin
-          cp gemini.py ~/.local/bin/gemini-cli
-          chmod +x ~/.local/bin/gemini-cli
+          cp gem-cli.py ~/.local/bin/gem-cli
+          chmod +x ~/.local/bin/gem-cli
 
       - name: Setup auth
         env:

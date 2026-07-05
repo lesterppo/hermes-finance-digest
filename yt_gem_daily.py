@@ -10,7 +10,7 @@ Fully configurable via environment variables and local files.
 No hardcoded credentials, paths, or Gem IDs.
 
 Dependencies:
-  - lesterppo/hermes-gem-cli (installed at ~/.local/bin/gemini-cli or PATH)
+  - lesterppo/hermes-gem-cli (installed at ~/.local/bin/gem-cli or PATH)
   - Python packages: requests, youtube-transcript-api
   - Gmail account with app password for SMTP
 
@@ -53,11 +53,11 @@ GEM_ID = os.environ.get("YT_GEM_GEMINI_GEM_ID", "")  # set after creation
 # gem-cli — auto-detect from PATH or common locations
 def _find_gemcli() -> str:
     for p in [os.environ.get("YT_GEM_GEMINI_CLI", ""),
-              os.path.expanduser("~/.local/bin/gemini-cli"),
-              "gemini-cli"]:
-        if p and (Path(p).exists() or p == "gemini-cli"):
+              os.path.expanduser("~/.local/bin/gem-cli"),
+              "gem-cli"]:
+        if p and (Path(p).exists() or p == "gem-cli"):
             return p
-    return "gemini-cli"  # last resort — will fail with clear error
+    return "gem-cli"
 
 GEMINI_CLI = _find_gemcli()
 
@@ -346,9 +346,9 @@ def analyze_video_with_gem(video: dict, gem_id: str, auth: dict,
     for attempt in range(max_retries + 1):
         try:
             result = subprocess.run(
-                [GEMINI_CLI, "-g", gem_id,
+                [GEMINI_CLI, gem_id,
                  "-m", GEM_MODEL, "--thinking", GEM_THINKING,
-                 "-o", output_file, "--json", "--brief"],
+                 "-o", output_file, "--json-out", "--brief"],
                 input=prompt, capture_output=True, text=True,
                 timeout=timeout, env=env,
             )
@@ -510,7 +510,7 @@ def main() -> int:
 
     # 3. Load auth
     if not os.path.exists(AUTH_JSON):
-        log(f"ERROR: {AUTH_JSON} not found — run: gemini-cli --init")
+        log(f"ERROR: {AUTH_JSON} not found — run: gem-cli --init")
         return 1
     with open(AUTH_JSON) as f:
         auth = json.load(f)
@@ -521,7 +521,7 @@ def main() -> int:
     auth_mtime = os.path.getmtime(AUTH_JSON)
     auth_age_days = (time.time() - auth_mtime) / 86400
     if auth_age_days > COOKIE_WARN_DAYS:
-        log(f"WARNING: auth.json is {auth_age_days:.0f} days old — run: gemini-cli --init")
+        log(f"WARNING: auth.json is {auth_age_days:.0f} days old — run: gem-cli --init")
 
     # 4. Scrape channels (parallel)
     cutoff = datetime.now(timezone.utc) - timedelta(hours=HOURS_BACK)

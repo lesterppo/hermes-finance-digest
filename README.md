@@ -19,7 +19,7 @@ pip install -r requirements.txt
 
 # 2. Install gem-cli (REQUIRED)
 # See: https://github.com/lesterppo/hermes-gem-cli
-gemini-cli --init   # browser-based auth
+gem-cli --init   # browser-based auth
 
 # 3. Configure
 cp CONFIG.md .env   # edit with your Gmail SMTP + recipient

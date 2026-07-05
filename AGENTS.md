@@ -21,16 +21,16 @@ GitHub Actions (daily 10am HKT)
 
 ## Prerequisites
 
-### 1. Gemini Gem CLI
-This project bundles `gemini.py` (from [lesterppo/hermes-gem-cli](https://github.com/lesterppo/hermes-gem-cli))
-which is copied to `~/.local/bin/gemini-cli` in the workflow. No separate install needed.
+### 1. gem-cli
+This project bundles `gem-cli.py` (from [lesterppo/hermes-gem-cli](https://github.com/lesterppo/hermes-gem-cli))
+which is copied to `~/.local/bin/gem-cli` in the workflow. The script auto-detects it.
 
 ### 2. Gemini Cookies
-You need `__Secure-1PSID` and `__Secure-1PSIDTS` cookies from a Google account
-signed into gemini.google.com. Get them by running gemini-cli locally once:
+Get `__Secure-1PSID` and `__Secure-1PSIDTS` cookies from a Google account
+signed into gemini.google.com:
 ```bash
 git clone https://github.com/lesterppo/hermes-gem-cli.git
-python hermes-gem-cli/gemini.py --init
+python hermes-gem-cli/gem-cli.py --init
 # → Creates ~/.gemini-cli/auth.json
 ```
 
@@ -40,13 +40,13 @@ Enable 2FA → generate app password at https://myaccount.google.com/apppassword
 ### 4. Gemini Gem
 Create one manually or let the script auto-create it on first run:
 ```bash
-echo "You are a financial analyst..." | gemini-cli --create-gem "Finance Analyst"
+echo "You are a financial analyst..." | gem-cli --create-gem "Finance Analyst"
 # → Save the Gem ID for YT_GEM_GEMINI_GEM_ID
 ```
 
 ## Setup Steps (for an AI agent)
 
-### Step 1: Fork/Clone
+### Step 1: Clone
 ```bash
 git clone https://github.com/lesterppo/yt-gem-digest.git
 cd yt-gem-digest
@@ -58,7 +58,7 @@ Edit these files:
 - `GEM_SYSTEM_PROMPT.md` — the Gem's system instruction (any language, any domain)
 
 ### Step 3: Set GitHub Secrets
-Go to repo → Settings → Secrets and variables → Actions → New repository secret:
+Repo → Settings → Secrets and variables → Actions → New repository secret:
 
 | Secret | Value |
 |--------|-------|
@@ -67,23 +67,15 @@ Go to repo → Settings → Secrets and variables → Actions → New repository
 | `YT_GEM_SMTP_USER` | Gmail address |
 | `YT_GEM_SMTP_PASS` | Gmail app password |
 | `YT_GEM_RECIPIENT` | Destination email |
-| `YT_GEM_GEMINI_GEM_ID` | Gem ID (from gem creation) |
+| `YT_GEM_GEMINI_GEM_ID` | Gem ID |
 
 ### Step 4: Test
-Trigger manually: Actions → YouTube Gem Daily Digest → Run workflow
+Actions → YouTube Gem Daily Digest → Run workflow
 
 ### Step 5: Auto-Refresh Cookies (optional)
-Set up a cron job to sync cookies to GitHub:
 ```bash
-# Every Sunday at 3am
-crontab -e
-0 3 * * 0 cd /path/to/yt-gem-digest && python refresh_gh_secrets.py owner/repo
-```
-
-Or via Hermes:
-```bash
-hermes cron add --name "Refresh GH Secrets" --schedule "0 3 * * 0" \
-  --script refresh-gh-secrets.py --no-agent --deliver local
+# Every Sunday at 3am — syncs local cookies to GitHub Secrets
+python refresh_gh_secrets.py owner/repo
 ```
 
 ## Files
@@ -91,7 +83,7 @@ hermes cron add --name "Refresh GH Secrets" --schedule "0 3 * * 0" \
 | File | Purpose |
 |------|---------|
 | `yt_gem_daily.py` | Main script — scraping, Gem analysis, email |
-| `gemini.py` | Bundled Gemini CLI (supports `-g` flag for Gems) |
+| `gem-cli.py` | Bundled gem-cli (positional GEM ID, `--json-out`) |
 | `yt_gem_watchdog.py` | Alerts if main script silent >48h |
 | `refresh_gh_secrets.py` | Syncs auth.json cookies to GitHub Secrets |
 | `channels.txt` | YouTube channel URLs (user-editable) |
@@ -111,6 +103,6 @@ hermes cron add --name "Refresh GH Secrets" --schedule "0 3 * * 0" \
 | Symptom | Fix |
 |---------|-----|
 | `auth.json not found` | GEMINI_SID/TS secrets missing or expired |
-| `gemini-cli exit=1` | Cookies expired (~30 days) — refresh and update secrets |
+| `gem-cli exit=1` | Cookies expired (~30 days) — refresh and update secrets |
 | `SMTP not configured` | YT_GEM_SMTP_* secrets missing |
 | No videos scraped | Check channels.txt, check YouTube page structure |
