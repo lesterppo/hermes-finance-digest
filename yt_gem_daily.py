@@ -32,6 +32,8 @@ from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Optional
 
+import requests
+
 
 # ── Configuration (all overridable via environment) ────────────────────────
 
