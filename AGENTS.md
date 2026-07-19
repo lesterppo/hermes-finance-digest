@@ -42,8 +42,8 @@ Works with any language, any domain (finance is just an example).
 
 ### Step 1: Clone
 ```bash
-git clone https://github.com/lesterppo/yt-gem-digest.git
-cd yt-gem-digest
+git clone https://github.com/lesterppo/yt-finance-digest.git
+cd yt-finance-digest
 ```
 
 ### Step 2: Configure

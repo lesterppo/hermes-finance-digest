@@ -13,8 +13,8 @@ Daily automated deep analysis of YouTube videos using Gemini (Flash Extended Thi
 
 ```bash
 # 1. Install
-git clone https://github.com/lesterppo/yt-gem-digest.git
-cd yt-gem-digest
+git clone https://github.com/lesterppo/yt-finance-digest.git
+cd yt-finance-digest
 pip install -r requirements.txt
 
 # 2. Setup Gemini auth (one-time)
