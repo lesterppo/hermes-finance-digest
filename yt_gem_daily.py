@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """
-YouTube Gem Daily Digest — Configurable Edition
+YouTube Finance Daily Digest — Configurable Edition
 
 Scrapes YouTube channels for recent videos, sends each video individually
-to a dedicated Gemini Gem (Flash Extended Thinking) for deep analysis,
+to Gemini (Flash Extended Thinking, normal chat) for deep analysis,
 compiles all analyses into an email report.
 
 Fully configurable via environment variables and local files.
-No hardcoded credentials, paths, or Gem IDs.
+No hardcoded credentials, paths, or API keys.
+
+Backend: gemini.py (gemini-webapi) — normal chat session, no Gem.
+System prompt from GEM_SYSTEM_PROMPT.md is injected as inline persona.
 
 Dependencies:
-  - lesterppo/hermes-gem-cli (installed at ~/.local/bin/gem-cli or PATH)
-  - Python packages: requests, youtube-transcript-api
+  - gemini.py (bundled, copied to ~/.local/bin/gemini-cli in CI)
+  - Python packages: requests, youtube-transcript-api, gemini-webapi
   - Gmail account with app password for SMTP
 
 Setup: see AGENTS.md for full walkthrough.
@@ -47,19 +50,16 @@ def _env_path(key: str, default_rel: str) -> str:
     return str(SCRIPT_DIR / default_rel)
 
 CHANNELS_FILE    = _env_path("YT_GEM_CHANNELS_FILE", "channels.txt")
-GEM_PROMPT_FILE  = _env_path("YT_GEM_PROMPT_FILE", "GEM_SYSTEM_PROMPT.md")
+PROMPT_FILE      = _env_path("YT_GEM_PROMPT_FILE", "GEM_SYSTEM_PROMPT.md")
 
-# Gemini Gem — create one on first run if GEM_ID not set
-GEM_ID = os.environ.get("YT_GEM_GEMINI_GEM_ID", "")  # set after creation
-
-# gem-cli — auto-detect from PATH or common locations
+# gemini-cli — auto-detect from PATH or common locations
 def _find_gemcli() -> str:
     for p in [os.environ.get("YT_GEM_GEMINI_CLI", ""),
-              os.path.expanduser("~/.local/bin/gem-cli"),
-              "gem-cli"]:
-        if p and (Path(p).exists() or p == "gem-cli"):
+              os.path.expanduser("~/.local/bin/gemini-cli"),
+              "gemini-cli"]:
+        if p and (Path(p).exists() or p == "gemini-cli"):
             return p
-    return "gem-cli"
+    return "gemini-cli"
 
 GEMINI_CLI = _find_gemcli()
 
@@ -74,14 +74,14 @@ SMTP_SERVER = os.environ.get("YT_GEM_SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = int(os.environ.get("YT_GEM_SMTP_PORT", "465"))
 RECIPIENT = os.environ.get("YT_GEM_RECIPIENT", "")
 
-# Gem model config
-GEM_MODEL = os.environ.get("YT_GEM_MODEL", "flash")
-GEM_THINKING = os.environ.get("YT_GEM_THINKING", "extended")
+# Model config
+MODEL = os.environ.get("YT_GEM_MODEL", "flash")
+THINKING = os.environ.get("YT_GEM_THINKING", "extended")
 
 # Timing
 HOURS_BACK = int(os.environ.get("YT_GEM_HOURS_BACK", "24"))
 GEMINI_TIMEOUT = int(os.environ.get("YT_GEM_TIMEOUT", "300"))
-MAX_CONCURRENT_GEM = int(os.environ.get("YT_GEM_MAX_CONCURRENT", "3"))
+MAX_CONCURRENT = int(os.environ.get("YT_GEM_MAX_CONCURRENT", "3"))
 GEMINI_RETRIES = int(os.environ.get("YT_GEM_RETRIES", "2"))
 TOTAL_TIMEOUT = int(os.environ.get("YT_GEM_TOTAL_TIMEOUT", "900"))
 COOKIE_WARN_DAYS = int(os.environ.get("YT_GEM_COOKIE_WARN_DAYS", "25"))
@@ -118,6 +118,7 @@ def _save_seen_videos(seen: dict[str, str]) -> None:
     now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(days=SEEN_PRUNE_DAYS)).isoformat()
     pruned = {vid: ts for vid, ts in seen.items() if ts >= cutoff}
+    os.makedirs(os.path.dirname(SEEN_FILE), exist_ok=True)
     with open(SEEN_FILE, "w") as f:
         json.dump(pruned, f, indent=2)
 
@@ -142,6 +143,7 @@ def _filter_duplicates(videos: list[dict], seen: dict[str, str]) -> tuple[list[d
 
 def _touch_heartbeat() -> None:
     try:
+        os.makedirs(os.path.dirname(HEARTBEAT_FILE), exist_ok=True)
         with open(HEARTBEAT_FILE, "w") as f:
             f.write(datetime.now(timezone.utc).isoformat())
     except IOError:
@@ -272,62 +274,34 @@ def _fetch_video_description(video_id: str) -> Optional[str]:
     return None
 
 
-# ── Gem Management ─────────────────────────────────────────────────────────
+# ── Persona ────────────────────────────────────────────────────────────────
 
-def load_gem_system_prompt(path: str) -> str:
-    """Load the Gem system instruction from a markdown file.
-    The first YAML frontmatter block (if any) is skipped — only the body is used."""
+def load_persona(path: str) -> str:
+    """Load the analysis persona from a markdown file.
+    Skips YAML frontmatter if present. The content is prepended to every prompt."""
     if not os.path.exists(path):
-        log(f"WARNING: Gem prompt file not found: {path}")
+        log(f"WARNING: Persona file not found: {path}")
         return ""
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
-    # Skip YAML frontmatter if present
     if content.startswith("---"):
         parts = content.split("---", 2)
         content = parts[2] if len(parts) > 2 else content
     return content.strip()
 
 
-def create_gemcli_gem(prompt_file: str, gem_name: str = "YT Finance Analyst") -> str:
-    """Create a Gemini Gem via gem-cli and return its ID.
-    Uses the content of prompt_file as the Gem's system instruction."""
-    if not os.path.exists(prompt_file):
-        raise FileNotFoundError(f"Gem prompt file not found: {prompt_file}")
-    system_prompt = load_gem_system_prompt(prompt_file)
-    if not system_prompt:
-        raise ValueError(f"Gem prompt file is empty: {prompt_file}")
+# ── Gemini Analysis ────────────────────────────────────────────────────────
 
-    log(f"Creating Gemini Gem from {prompt_file} ({len(system_prompt)} chars)...")
-    result = subprocess.run(
-        [GEMINI_CLI, "--create-gem", gem_name],
-        input=system_prompt,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"gem-cli --create-gem failed: {result.stderr[:300]}")
-
-    try:
-        data = json.loads(result.stdout.strip())
-        if data.get("ok") and data.get("id"):
-            gem_id = data["id"]
-            log(f"Created Gem: {gem_id} ({data.get('name', gem_name)})")
-            return gem_id
-        raise RuntimeError(f"Unexpected gem-cli output: {result.stdout[:200]}")
-    except json.JSONDecodeError:
-        raise RuntimeError(f"Could not parse gem-cli output: {result.stdout[:200]}")
-
-
-def analyze_video_with_gem(video: dict, gem_id: str, auth: dict,
-                           timeout: int, max_retries: int) -> dict:
-    """Send one video to Gemini Gem for deep analysis with retry."""
+def analyze_video(video: dict, persona: str, auth: dict,
+                  timeout: int, max_retries: int) -> dict:
+    """Send one video to Gemini (normal chat via gemini.py --json) for deep analysis."""
     env = os.environ.copy()
     env["GEMINI_SID"] = auth.get("__Secure-1PSID", "")
     env["GEMINI_TS"] = auth.get("__Secure-1PSIDTS", "")
 
-    prompt = f"""請深入分析以下財經影片（繁體中文，至少300字）：
+    prompt = f"""{persona}
+
+請深入分析以下財經影片（繁體中文，至少300字）：
 
 頻道：{video['channel']}
 標題：{video['title']}
@@ -342,41 +316,30 @@ def analyze_video_with_gem(video: dict, gem_id: str, auth: dict,
 2. 數據支撐與市場背景
 3. 投資含義與風險提示"""
 
-    output_file = f"/tmp/gem_video_{video['video_id'][:8]}.md"
     last_error = ""
 
     for attempt in range(max_retries + 1):
         try:
             result = subprocess.run(
-                [GEMINI_CLI, gem_id,
-                 "-m", GEM_MODEL, "--thinking", GEM_THINKING,
-                 "-o", output_file, "--json-out", "--brief"],
-                input=prompt, capture_output=True, text=True,
+                [GEMINI_CLI,
+                 "-p", prompt,
+                 "-m", MODEL, "--thinking", THINKING,
+                 "--json", "--brief", "-q"],
+                capture_output=True, text=True,
                 timeout=timeout, env=env,
             )
 
             if result.returncode == 0:
                 try:
                     stdout_json = json.loads(result.stdout.strip())
-                    if stdout_json.get("ok") and stdout_json.get("f"):
-                        out_path = stdout_json["f"]
-                        if os.path.exists(out_path):
-                            with open(out_path, "r", encoding="utf-8") as f:
-                                analysis = f.read()
-                            if len(analysis) > 50:
-                                return {"video_id": video["video_id"], "title": video["title"],
-                                        "channel": video["channel"], "url": video["url"],
-                                        "analysis": analysis, "ok": True}
+                    if stdout_json.get("ok") and stdout_json.get("text"):
+                        analysis = stdout_json["text"]
+                        if len(analysis) > 50:
+                            return {"video_id": video["video_id"], "title": video["title"],
+                                    "channel": video["channel"], "url": video["url"],
+                                    "analysis": analysis, "ok": True}
                 except (json.JSONDecodeError, KeyError):
                     pass
-
-                if os.path.exists(output_file):
-                    with open(output_file, "r", encoding="utf-8") as f:
-                        analysis = f.read()
-                    if len(analysis) > 50:
-                        return {"video_id": video["video_id"], "title": video["title"],
-                                "channel": video["channel"], "url": video["url"],
-                                "analysis": analysis, "ok": True}
 
             last_error = f"exit={result.returncode} stderr: {result.stderr[:200]}"
 
@@ -424,7 +387,7 @@ def _send_status_email(channels: dict, start_time: datetime) -> None:
     subject = f"📊 財經頻道每日狀態 — {date_str} (無新影片)"
     body = f"""財經頻道每日狀態報告
 日期：{date_str}
-分析引擎：Gemini Gem ({GEM_MODEL} + {GEM_THINKING} thinking, ID: {GEM_ID or '(auto-created)'})
+分析引擎：Gemini {MODEL} + {THINKING} thinking（正常聊天模式）
 
 監控頻道（{len(channels)}個）：
 {channel_list}
@@ -457,7 +420,7 @@ def _send_report_email(channels: dict, results: list[dict],
 
     body = f"""財經頻道每日深度分析報告
 日期：{date_str}
-分析引擎：Gemini Gem — {GEM_MODEL} + {GEM_THINKING} thinking (ID: {GEM_ID or '(auto-created)'})
+分析引擎：Gemini — {MODEL} + {THINKING} thinking（正常聊天模式）
 分析方式：逐片獨立深度分析
 
 監控頻道（{len(channels)}個）：
@@ -470,9 +433,10 @@ def _send_report_email(channels: dict, results: list[dict],
 {'=' * 60}
 
 📌 說明：
-• 分析引擎：Gemini Flash Extended Thinking（經由 Gem {GEM_ID or '(auto-created)'}）
+• 分析引擎：Gemini Flash Extended Thinking（正常聊天模式，經由 gemini-webapi）
 • 內容來源：YouTube 頁面爬取（字幕 + 影片描述）
-• 每個影片獨立發送至 Gem 進行深度分析
+• 每個影片獨立發送至 Gemini 進行深度分析
+• 分析風格由 GEM_SYSTEM_PROMPT.md 定義
 """
     subject = f"📊 財經頻道每日深度分析 — {date_str}"
     _send_email(subject, body)
@@ -482,7 +446,7 @@ def _send_report_email(channels: dict, results: list[dict],
 
 def main() -> int:
     start_time = datetime.now()
-    log("Starting YouTube Gem Daily Digest")
+    log("Starting YouTube Finance Daily Digest")
 
     # 1. Validate config
     if not os.path.exists(CHANNELS_FILE):
@@ -496,23 +460,18 @@ def main() -> int:
         return 1
     log(f"Loaded {len(channels)} channels")
 
-    # 2. Load or create Gem
-    global GEM_ID
-    if not GEM_ID:
-        if not os.path.exists(GEM_PROMPT_FILE):
-            log(f"ERROR: Gem prompt file not found: {GEM_PROMPT_FILE}")
-            log("Create GEM_SYSTEM_PROMPT.md with the Gem's system instruction.")
-            return 1
-        try:
-            GEM_ID = create_gemcli_gem(GEM_PROMPT_FILE)
-            log(f"Save this Gem ID for future runs: export YT_GEM_GEMINI_GEM_ID={GEM_ID}")
-        except Exception as e:
-            log(f"ERROR creating Gem: {e}")
-            return 1
+    # 2. Load analysis persona
+    persona = ""
+    if os.path.exists(PROMPT_FILE):
+        persona = load_persona(PROMPT_FILE)
+        if persona:
+            log(f"Loaded persona from {PROMPT_FILE} ({len(persona)} chars)")
+    if not persona:
+        log("WARNING: No persona loaded — using default analysis prompt")
 
     # 3. Load auth
     if not os.path.exists(AUTH_JSON):
-        log(f"ERROR: {AUTH_JSON} not found — run: gem-cli --init")
+        log(f"ERROR: {AUTH_JSON} not found — run: gemini-cli --init")
         return 1
     with open(AUTH_JSON) as f:
         auth = json.load(f)
@@ -523,7 +482,7 @@ def main() -> int:
     auth_mtime = os.path.getmtime(AUTH_JSON)
     auth_age_days = (time.time() - auth_mtime) / 86400
     if auth_age_days > COOKIE_WARN_DAYS:
-        log(f"WARNING: auth.json is {auth_age_days:.0f} days old — run: gem-cli --init")
+        log(f"WARNING: auth.json is {auth_age_days:.0f} days old — run: gemini-cli --init")
 
     # 4. Scrape channels (parallel)
     cutoff = datetime.now(timezone.utc) - timedelta(hours=HOURS_BACK)
@@ -583,13 +542,13 @@ def main() -> int:
         for fut in as_completed(futures):
             fut.result()
 
-    # 7. Analyze with Gem (parallel, limited concurrency)
-    log(f"Calling Gemini Gem ({GEM_ID[:12]}...) for each video (max {MAX_CONCURRENT_GEM} concurrent)")
+    # 7. Analyze with Gemini (parallel, limited concurrency)
+    log(f"Calling Gemini ({MODEL} + {THINKING} thinking) for each video (max {MAX_CONCURRENT} concurrent)")
 
     results: list[dict] = []
-    with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_GEM) as ex:
+    with ThreadPoolExecutor(max_workers=MAX_CONCURRENT) as ex:
         futures = {
-            ex.submit(analyze_video_with_gem, v, GEM_ID, auth, GEMINI_TIMEOUT, GEMINI_RETRIES): v
+            ex.submit(analyze_video, v, persona, auth, GEMINI_TIMEOUT, GEMINI_RETRIES): v
             for v in all_videos
         }
         for fut in as_completed(futures):

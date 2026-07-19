@@ -1,4 +1,4 @@
-# YouTube Gem Daily Digest — Configuration
+# YouTube Finance Daily Digest — Configuration
 # Copy this file to .env and fill in your values.
 # All variables are read at runtime by yt_gem_daily.py.
 
@@ -8,24 +8,21 @@ YT_GEM_SMTP_USER=your.email@gmail.com
 YT_GEM_SMTP_PASS=your16charapppassword
 YT_GEM_RECIPIENT=recipient@email.com
 
-# ── OPTIONAL (auto-detected) ────────────────────────────────────────────────
-# Gemini Gem ID — set after first run (the script creates one automatically)
-# YT_GEM_GEMINI_GEM_ID=xxxxxxxxxxxx
-
+# ── OPTIONAL ────────────────────────────────────────────────────────────────
 # Paths — defaults are relative to the script directory
 # YT_GEM_CHANNELS_FILE=channels.txt
 # YT_GEM_PROMPT_FILE=GEM_SYSTEM_PROMPT.md
 # YT_GEM_AUTH_JSON=~/.gemini-cli/auth.json
 
-# ── GEMINI GEM ──────────────────────────────────────────────────────────────
-# Model: flash (fast), pro (deeper), thinking (reasoning)
+# ── GEMINI ──────────────────────────────────────────────────────────────────
+# Model: flash (fast, default), pro (deeper), lite (cheapest)
 # YT_GEM_MODEL=flash
 # YT_GEM_THINKING=extended
 
 # ── TIMING ──────────────────────────────────────────────────────────────────
 # YT_GEM_HOURS_BACK=24          # hours to look back for new videos
-# YT_GEM_TIMEOUT=300            # seconds per gem-cli call
-# YT_GEM_MAX_CONCURRENT=3       # parallel gem-cli calls
+# YT_GEM_TIMEOUT=300            # seconds per gemini-cli call
+# YT_GEM_MAX_CONCURRENT=3       # parallel gemini-cli calls
 # YT_GEM_RETRIES=2              # retries on transient failures
 # YT_GEM_TOTAL_TIMEOUT=900      # hard script timeout (seconds)
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Watchdog: checks that the YouTube Gem Daily Digest has run successfully
+Watchdog: checks that the YouTube Finance Daily Digest has run successfully
 in the last N hours. Sends an alert email if silent.
 
 Configure via environment variables (same as yt_gem_daily.py).
@@ -50,8 +50,8 @@ def main() -> int:
             f"最後成功執行: {last_beat.strftime('%Y-%m-%d %H:%M:%S')} UTC\n"
             f"當前時間: {now.strftime('%Y-%m-%d %H:%M:%S')} UTC\n"
             f"靜默時長: {hours:.0f} 小時（閾值: {SILENCE_HOURS}h）\n\n"
-            f"可能原因: auth cookie 過期、gem-cli 故障、網路問題、排程器停擺\n"
-            f"修復: gem-cli --init 更新 cookie，然後手動運行 yt-gem-daily.py"
+            f"可能原因: auth cookie 過期、gemini-cli 故障、網路問題、排程器停擺\n"
+            f"修復: gemini-cli --init 更新 cookie，然後手動運行 yt-gem-daily.py"
         )
         return 1
 
@@ -60,11 +60,12 @@ def main() -> int:
 
 
 def _alert(subject: str, detail: str) -> None:
-    body = f"""YouTube Gem Daily Digest — 警報
+    body = f"""YouTube Finance Daily Digest — 警報
 
 {detail}
 
-系統名稱: YouTube Gem Daily Digest (yt_gem_daily.py)
+系統名稱: YouTube Finance Daily Digest (yt_gem_daily.py)
+引擎: gemini.py webapi (Flash Extended Thinking)
 """
     try:
         msg = MIMEText(body, _charset="utf-8", _subtype="plain")

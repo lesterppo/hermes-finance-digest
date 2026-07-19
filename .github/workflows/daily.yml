@@ -1,4 +1,4 @@
-name: YouTube Gem Daily Digest
+name: YouTube Finance Daily Digest
 
 on:
   schedule:
@@ -21,11 +21,11 @@ jobs:
           pip install -r requirements.txt
           pip install gemini-webapi browser-cookie3 loguru
 
-      - name: Setup gem-cli
+      - name: Setup gemini-cli
         run: |
           mkdir -p ~/.local/bin
-          cp gem-cli.py ~/.local/bin/gem-cli
-          chmod +x ~/.local/bin/gem-cli
+          cp gemini.py ~/.local/bin/gemini-cli
+          chmod +x ~/.local/bin/gemini-cli
 
       - name: Setup auth
         env:
@@ -41,5 +41,4 @@ jobs:
           YT_GEM_SMTP_USER: ${{ secrets.YT_GEM_SMTP_USER }}
           YT_GEM_SMTP_PASS: ${{ secrets.YT_GEM_SMTP_PASS }}
           YT_GEM_RECIPIENT: ${{ secrets.YT_GEM_RECIPIENT }}
-          YT_GEM_GEMINI_GEM_ID: ${{ secrets.YT_GEM_GEMINI_GEM_ID }}
         run: python yt_gem_daily.py
