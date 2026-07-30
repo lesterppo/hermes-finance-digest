@@ -13,8 +13,9 @@ YT_GEM_RECIPIENT=recipient@email.com
 # YT_GEM_CHANNELS_FILE=channels.txt
 # YT_GEM_PROMPT_FILE=GEM_SYSTEM_PROMPT.md
 # YT_GEM_AUTH_JSON=~/.gemini-cli/auth.json
+# YT_GEM_GEMINI_CLI=~/.local/bin/gemini-cli
 
-# ── GEMINI ──────────────────────────────────────────────────────────────────
+# ── GEMINI MODEL ────────────────────────────────────────────────────────────
 # Model: flash (fast, default), pro (deeper), lite (cheapest)
 # YT_GEM_MODEL=flash
 # YT_GEM_THINKING=extended
