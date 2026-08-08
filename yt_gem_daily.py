@@ -315,9 +315,24 @@ def analyze_video(video: dict, persona: str, auth: dict,
             if result.returncode == 0:
                 try:
                     stdout_json = json.loads(result.stdout.strip())
-                    if stdout_json.get("ok") and stdout_json.get("text"):
-                        analysis = stdout_json["text"]
-                        if len(analysis) > 80:
+                    if stdout_json.get("ok"):
+                        # gemini.py emits a pointer JSON: {"ok":true,"f":"<path>","s":N}.
+                        # The full response (text) is written to that file. Fall back
+                        # to an inline "text" field if present (older CLI versions).
+                        analysis = None
+                        fpath = stdout_json.get("f")
+                        if fpath:
+                            fp = Path(fpath)
+                            if fp.exists():
+                                raw = fp.read_text(encoding="utf-8", errors="replace")
+                                try:
+                                    file_json = json.loads(raw)
+                                    analysis = file_json.get("text") or raw
+                                except json.JSONDecodeError:
+                                    analysis = raw
+                        if not analysis:
+                            analysis = stdout_json.get("text")
+                        if analysis and len(analysis) > 80:
                             return {"video_id": video["video_id"], "title": video["title"],
                                     "channel": video["channel"], "url": video["url"],
                                     "analysis": analysis, "ok": True}
