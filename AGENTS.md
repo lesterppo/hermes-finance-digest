@@ -109,6 +109,19 @@ python refresh_gh_secrets.py owner/repo
 ```
 Requires `GH_TOKEN` env var with repo access.
 
+### Step 9: CLI Contract (IMPORTANT for AI agents)
+The bundled `gemini.py` writes the full response to a temp file and prints a
+**pointer JSON** to stdout: `{"ok":true,"f":"/tmp/gemini-<ts>.json","s":N,"model":"..."}`.
+The actual text lives in the file at `f` (JSON payload with a `text` key, or raw
+markdown if `--json-out` is not set). Do NOT expect an inline `text` field in
+stdout. Any consumer must read the file at `f`:
+```python
+import json, pathlib
+p = json.loads(result.stdout)          # {"ok":true,"f":"..."}
+text = json.loads(pathlib.Path(p["f"]).read_text())["text"] if p["f"].endswith(".json") \
+       else pathlib.Path(p["f"]).read_text()
+```
+
 ## Environment Variables Reference
 
 All configurable via `YT_GEM_*` env vars. Set in GitHub Secrets or `.env` file.
@@ -162,6 +175,7 @@ All configurable via `YT_GEM_*` env vars. Set in GitHub Secrets or `.env` file.
 
 | Symptom | Likely Cause | Fix |
 |---------|-------------|-----|
+| All analyses FAIL (0/4 OK, exit=0) | gemini.py outputs pointer JSON, script expected inline text | Fixed in `yt_gem_daily.py`: it now reads the response file at pointer key `f` (`{"ok":true,"f":"<path>"}`) and falls back to inline `text`. If you see this again, check the `f` key handling. |
 | `auth.json not found` | GEMINI_SID/TS secrets missing | Re-run `gemini.py --init` and update secrets |
 | `gemini-cli exit=1` | Cookies expired (~30 days) | Run `gemini.py --init` again, update GitHub Secrets |
 | `SMTP not configured` | YT_GEM_SMTP_* secrets missing | Add SMTP_USER, SMTP_PASS, RECIPIENT to GitHub Secrets |
