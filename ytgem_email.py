@@ -88,18 +88,24 @@ def build_html(date_str: str, results: list[dict], meta: dict) -> str:
 
 
 def make_infographic(results: list[dict]) -> str | None:
-    """Generate the conclusion infographic from successful analyses."""
+    """Conclusion infographic. Primary: matplotlib data-viz (sentiment split
+    bar + direction-marked takeaways). Fallback: Gemini image gen."""
     if infographic is None:
         return None
     try:
         items = infographic.extract_verdicts_from_analyses(results)
         if not items:
             return None
-        prompt = infographic.build_videos_prompt("財經影片今日重點", items)
-        if not prompt:
-            return None
-        return infographic.gen_image(
-            prompt, os.path.join(infographic.OUT_ROOT, "ytgem"))
+        img = infographic.render_videos_chart(
+            items, title="財經影片今日重點")
+        if img:
+            return img
+        if not infographic.matplotlib_available():
+            prompt = infographic.build_videos_prompt("財經影片今日重點", items)
+            if prompt:
+                return infographic.gen_image(
+                    prompt, os.path.join(infographic.OUT_ROOT, "ytgem"))
+        return None
     except Exception as e:  # noqa: BLE001
         print(f"[infographic] skipped: {e}", file=sys.stderr)
         return None

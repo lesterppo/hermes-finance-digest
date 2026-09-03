@@ -19,7 +19,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install gemini-webapi browser-cookie3 loguru
+          pip install gemini-webapi browser-cookie3 loguru matplotlib
 
       - name: Setup gemini-cli
         run: |
