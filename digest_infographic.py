@@ -62,6 +62,9 @@ def gen_image(prompt: str, out_dir: str, timeout: int = 150,
                     key=os.path.getmtime)
                 if new:
                     return new[-1]
+            if parsed.get("err"):
+                print(f"[infographic] gemini err={parsed.get('err')}: "
+                      f"{parsed.get('msg', '')[:120]}", file=sys.stderr)
         except (subprocess.TimeoutExpired, Exception) as e:  # noqa: BLE001
             if attempt >= retries:
                 print(f"[infographic] gen failed: {e}", file=sys.stderr)
