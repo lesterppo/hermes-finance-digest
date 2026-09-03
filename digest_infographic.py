@@ -97,43 +97,181 @@ def gen_image(prompt: str, out_dir: str, timeout: int = 280,
 
 # ── arXiv digest infographic ───────────────────────────────────────────────
 
-def build_arxiv_prompt(score_lines: list[str], n_recommended: int) -> str:
-    """score_lines: raw digest lines like
-    '2609.02885 — Title — AGENT 5/5 — TUNE 4/5' (optional markdown **bold)."""
-    cards = []
-    for ln in score_lines[:4]:
-        m = re.match(
-            r"[\s*>#-]*\*{0,2}\s*(?:arxiv:?\s*)?(\d{4}\.\d{4,5})\S*\s*\*{0,2}"
-            r"\s*[—–-]+\s*(.+?)\s*[—–-]+\s*\*{0,2}\s*AGENT\s*(\d)\s*/\s*5"
-            r"\s*\*{0,2}\s*[—–-]+\s*\*{0,2}\s*TUNE\s*(\d)",
-            ln, re.I)
-        if not m:
-            continue
-        pid, title, agent, tune = m.groups()
-        cards.append(f"card: paper {pid} '{_shorten(title.strip('* '), 30)}' "
-                     f"badge AGENT {agent}/5, badge TUNE {tune}/5")
-    if not cards:
+def build_arxiv_prompt(score_lines: list[str], n_recommended: int = 0,
+                       papers: list[dict] | None = None,
+                       digest_text: str = "") -> str:
+    """Rich-context prompt for the arXiv conclusion infographic.
+
+    papers: [{id,title,agent,tune,summary}] — summaries give Gemini real
+    content to visualize instead of inventing. digest_text: optional
+    recommended-section notes for takeaway phrasing. Demands an analytical
+    dashboard composition (ranked leaderboard + score bars + takeaways),
+    NOT decorative text cards.
+    """
+    if not papers:
+        papers = []
+        for ln in score_lines[:5]:
+            m = re.match(
+                r"[\s*>#-]*\*{0,2}\s*(?:arxiv:?\s*)?(\d{4}\.\d{4,5})\S*\s*\*{0,2}"
+                r"\s*[—–-]+\s*(.+?)\s*[—–-]+\s*\*{0,2}\s*AGENT\s*(\d)\s*/\s*5"
+                r"\s*\*{0,2}\s*[—–-]+\s*\*{0,2}\s*TUNE\s*(\d)", ln, re.I)
+            if m:
+                pid, t, a, tu = m.groups()
+                papers.append({"id": pid, "title": t.strip("* "),
+                               "agent": int(a), "tune": int(tu), "summary": ""})
+    papers = sorted((papers or [])[:5],
+                    key=lambda p: max(p.get("agent", 0), p.get("tune", 0)),
+                    reverse=True)
+    if not papers:
         return ""
-    top_n = min(n_recommended, 3)
-    return (f"{STYLE}. Title: 'arXiv cs.AI Daily Picks'. "
-            f"{len(cards)} paper cards in a row, each card shows the paper id, "
-            f"its short title, and two small score badges (AGENT x/5, TUNE x/5). "
-            f" {' '.join(cards)} "
-            f"Footer ribbon: '{top_n} recommended today'. No other text.")
+
+    blocks = []
+    for rank, p in enumerate(papers, 1):
+        b = (f"#{rank} {p['id']} | title: {p['title']} | "
+             f"AGENT score {p.get('agent', '?')}/5 | "
+             f"TUNE score {p.get('tune', '?')}/5")
+        if p.get("summary"):
+            b += f"\n   what it does: {p['summary'][:200]}"
+        blocks.append(b)
+    n_rec = n_recommended or sum(
+        1 for p in papers if max(p.get("agent", 0), p.get("tune", 0)) >= 4)
+    digest_note = ""
+    if digest_text:
+        digest_note = ("\nExtra context (recommended-paper notes — use only "
+                       "for takeaway phrasing):\n" + digest_text[:900])
+
+    return (
+        "A wide 16:9 analytics dashboard infographic titled "
+        "'arXiv cs.AI Daily Radar — what matters today'. "
+        "This is a DATA-DENSE editorial graphic for an AI research digest, "
+        "NOT a decorative card layout. Required elements:\n"
+        "1. LEFT half: a ranked leaderboard of these papers, one row each, "
+        "showing rank number, arXiv id, short title, and a horizontal score "
+        "bar pair (teal bar = AGENT applicability, green bar = "
+        "TUNE/trainability), sorted best first, top row visually highlighted "
+        "with an amber rank badge:\n"
+        + "\n".join("  " + b for b in blocks) + "\n"
+        "2. RIGHT half: a 'Why it matters' panel with one ultra-short "
+        "takeaway phrase (max 8 words) for each of the top-3 papers, "
+        "derived ONLY from the context above — do not invent claims.\n"
+        f"3. TOP-RIGHT corner: two stat chips: '{len(papers)} screened' and "
+        f"'{n_rec} recommended'.\n"
+        "4. Color-code scores red/amber/green (high=green, low=red). Flat "
+        "vector, dark navy background, thin dividers, small crisp text, "
+        "Bloomberg-terminal dashboard aesthetic. All text legible and "
+        "exactly as given — no lorem ipsum, no extra papers, no invented "
+        "numbers." + digest_note)
 
 
 # ── yt-gem / finance digest infographic ────────────────────────────────────
 
-def build_videos_prompt(channel_label: str, items: list[dict]) -> str:
-    """items: [{title, verdict}] where verdict is a <=6-word takeaway."""
-    cards = []
-    for it in items[:4]:
-        cards.append(f"card: '{_shorten(it.get('verdict') or it.get('title',''), 22)}'")
-    if not cards:
+def parse_score_lines(score_lines: list[str]) -> list[dict]:
+    """Parse 'id — title — AGENT n/5 — TUNE n/5' lines (markdown tolerant)
+    into [{id,title,agent,tune,summary:''}]."""
+    out = []
+    for ln in score_lines:
+        m = re.match(
+            r"[\s*>#-]*\*{0,2}\s*(?:arxiv:?\s*)?(\d{4}\.\d{4,5})\S*\s*\*{0,2}"
+            r"\s*[—–-]+\s*(.+?)\s*[—–-]+\s*\*{0,2}\s*AGENT\s*(\d)\s*/\s*5"
+            r"\s*\*{0,2}\s*[—–-]+\s*\*{0,2}\s*TUNE\s*(\d)", ln, re.I)
+        if m:
+            pid, t, a, tu = m.groups()
+            out.append({"id": pid, "title": t.strip("* "), "agent": int(a),
+                        "tune": int(tu), "summary": ""})
+    return out
+
+
+def build_videos_prompt(channel_label: str, items: list[dict],
+                        date_label: str = "") -> str:
+    """Rich-context prompt for the finance-video digest infographic.
+    items: [{channel,title,url,verdict,direction}] with real takeaways."""
+    rows = []
+    for it in items[:6]:
+        d = it.get("direction")
+        if d == 1:
+            mark, word = "▲", "bullish"
+        elif d == -1:
+            mark, word = "▼", "bearish"
+        else:
+            mark, word = "◆", "neutral/event"
+        rows.append(
+            f"{mark} {word} | {it.get('channel', '')} | takeaway: "
+            f"{_shorten(it.get('verdict') or it.get('title', ''), 42)}")
+    if not rows:
         return ""
-    return (f"{STYLE}. Title: '{channel_label}'. "
-            f"{len(cards)} takeaway cards in a row, each with one icon and "
-            f"its short label. {' '.join(cards)} No other text.")
+    n_bull = sum(1 for r in rows if "▲" in r)
+    n_bear = sum(1 for r in rows if "▼" in r)
+    n_flat = len(rows) - n_bull - n_bear
+    date_note = f"Data date: {date_label}. " if date_label else ""
+    return (
+        "A wide 16:9 financial market-pulse dashboard infographic titled "
+        f"'{channel_label}'. DATA-DENSE morning-brief style, NOT decorative "
+        "cards. Required elements:\n"
+        "1. LEFT: 'Market direction' panel — a horizontal 100% stacked bar "
+        f"showing today's video sentiment split: bullish {n_bull} (green), "
+        f"bearish {n_bear} (red), neutral/event {n_flat} (grey), with the "
+        "counts printed inside the segments.\n"
+        "2. RIGHT: 'Today's takeaways' list — one row per video, each with "
+        "its direction symbol (▲ green / ▼ red / ◆ grey), the channel name, "
+        "and the short takeaway text EXACTLY as given (do not rewrite the "
+        "financial claims):\n"
+        + "\n".join("  " + r for r in rows) + "\n"
+        f"3. {date_note}Footer: a ticker-style strip listing the channels "
+        "covered.\n"
+        "Flat vector, dark navy background, Bloomberg-terminal dashboard "
+        "aesthetic, crisp legible text, thin separators, red/green market "
+        "color semantics. No invented tickers, numbers, or takeaways.")
+
+
+def arxiv_notebook_context(papers: list[dict], digest_text: str = "") -> str:
+    """Context/instruction block for NotebookLM infographic generation:
+    ranked paper list with scores + summaries."""
+    lines = []
+    for rank, p in enumerate(papers[:8], 1):
+        lines.append(
+            f"{rank}. {p['id']} — {p['title']} "
+            f"(AGENT {p.get('agent', '?')}/5, TUNE {p.get('tune', '?')}/5)"
+            + (f" — {p.get('summary', '')[:180]}" if p.get("summary") else ""))
+    inst = (
+        "Create a data-dense dark-navy dashboard infographic of today's "
+        "arXiv cs.AI screening for an AI engineer audience. Show a ranked "
+        "leaderboard with one row per paper: rank, arXiv id, short title, "
+        "and two colored score bars (AGENT = agent-harness applicability, "
+        "TUNE = trainability on a free Colab T4), best paper highlighted. "
+        "Add a 'Why it matters' panel with one short takeaway per top paper "
+        "and summary chips (papers screened / recommended). Use the paper "
+        "list below exactly — no invented papers, numbers, or claims.\n\n"
+        + "\n".join(lines))
+    if digest_text:
+        inst += "\n\nSupporting notes:\n" + digest_text[:1200]
+    return inst
+
+
+def videos_notebook_context(items: list[dict], date_label: str = "") -> str:
+    """Context/instruction block for NotebookLM infographic generation for
+    the finance video digest: youtube links + takeaways + sentiment split."""
+    rows = []
+    for it in items[:8]:
+        d = it.get("direction")
+        word = {1: "bullish", -1: "bearish"}.get(d, "neutral/event")
+        rows.append(f"- [{word}] {it.get('channel', '')}: "
+                    f"{_shorten(it.get('verdict') or it.get('title', ''), 60)}"
+                    f" ({it.get('url', '')})")
+    n_bull = sum(1 for r in rows if "[bullish]" in r)
+    n_bear = sum(1 for r in rows if "[bearish]" in r)
+    n_flat = len(rows) - n_bull - n_bear
+    return (
+        "Create a dark-navy financial market-pulse dashboard infographic "
+        "summarizing today's Chinese finance YouTube digest. Include: "
+        "(1) a left panel 'Market direction' with a stacked bar: bullish "
+        f"{n_bull}, bearish {n_bear}, neutral/event {n_flat}; (2) a right "
+        "panel 'Today's takeaways' listing each video with its sentiment "
+        "symbol, channel name, short takeaway, and its YouTube URL in small "
+        "text; (3) a footer listing the channels covered. Bloomberg-terminal "
+        "aesthetic, red/green market semantics, crisp legible text. Use only "
+        "the videos below"
+        + (f" — data date {date_label}" if date_label else "") + ":\n\n"
+        + "\n".join(rows))
 
 
 def extract_verdicts_from_analyses(analyses: list[dict]) -> list[dict]:

@@ -70,12 +70,18 @@ def build_html(date_str: str, results: list[dict], meta: dict) -> str:
     .cap{color:#57606a;font-size:12px;}
   </style>"""
     info_html = ""
-    if meta.get("infographic_cid"):
-        info_html = ("<h3>📌 今日重點一覽</h3>"
-                     f"<img class='infographic' src='cid:{meta['infographic_cid']}' "
-                     f"alt='digest infographic'/>"
-                     "<div class='cap'>方向分佈圖由當日影片分析數據本地渲染"
-                     "（matplotlib）：▲ 看多 · ▼ 看空 · ◆ 中性/事件。</div>")
+    cids = meta.get("infographic_cids") or (
+        [meta["infographic_cid"]] if meta.get("infographic_cid") else [])
+    labels = ["方向分佈圖 — 由當日影片分析數據本地渲染（matplotlib）："
+              "▲ 看多 · ▼ 看空 · ◆ 中性/事件",
+              "AI 市場脈搏儀表板 — Gemini 圖像生成（基於同一份影片數據）"]
+    if cids:
+        info_html = "<h3>📌 今日重點一覽</h3>"
+        for i, cid in enumerate(cids):
+            info_html += (f"<img class='infographic' src='cid:{cid}' "
+                          f"alt='digest infographic {i+1}'/>")
+            if i < len(labels):
+                info_html += f"<div class='cap'>{labels[i]}</div>"
     return f"""<html><head><meta charset="utf-8">{css}</head><body>
 <h1>📊 財經頻道每日深度分析 — {date_str}</h1>
 <div class="meta">分析引擎：Gemini Flash + Extended Thinking（webapi）
@@ -88,48 +94,70 @@ def build_html(date_str: str, results: list[dict], meta: dict) -> str:
 </body></html>"""
 
 
-def make_infographic(results: list[dict]) -> str | None:
-    """Conclusion infographic. Primary: matplotlib data-viz (sentiment split
-    bar + direction-marked takeaways). Fallback: Gemini image gen."""
+def make_infographics(results: list[dict]) -> list[str]:
+    """Conclusion infographics: (1) matplotlib data-viz pulse panel,
+    (2) Gemini image-gen dashboard with rich context. Both returned when
+    they succeed; each fails independently."""
     if infographic is None:
-        return None
+        return []
+    out = []
     try:
         items = infographic.extract_verdicts_from_analyses(results)
         if not items:
-            return None
-        img = infographic.render_videos_chart(
-            items, title="財經影片今日重點")
+            return out
+        for it in items:
+            it.setdefault("direction", infographic.verdict_direction(
+                (it.get("verdict") or "") + " " + (it.get("title") or "")))
+        # 1. matplotlib pulse panel
+        img = infographic.render_videos_chart(items, title="財經影片今日重點")
         if img:
-            return img
-        if not infographic.matplotlib_available():
-            prompt = infographic.build_videos_prompt("財經影片今日重點", items)
-            if prompt:
-                return infographic.gen_image(
-                    prompt, os.path.join(infographic.OUT_ROOT, "ytgem"))
-        return None
+            out.append(img)
+        # 2. gemini image-gen with rich context
+        prompt = infographic.build_videos_prompt("財經影片今日重點", items)
+        if prompt:
+            gem = infographic.gen_image(
+                prompt, os.path.join(infographic.OUT_ROOT, "ytgem"),
+                retries=1, timeout=280)
+            if gem:
+                out.append(gem)
     except Exception as e:  # noqa: BLE001
-        print(f"[infographic] skipped: {e}", file=sys.stderr)
-        return None
+        print(f"[infographic] partial failure: {e}", file=sys.stderr)
+    return out
 
 
-def send_html(subject: str, html: str, image_path: str | None = None,
-              cid: str = "infographic") -> bool:
+def make_infographic(results: list[dict]) -> str | None:
+    """Back-compat single-image wrapper."""
+    imgs = make_infographics(results)
+    return imgs[0] if imgs else None
+
+
+def send_html(subject: str, html: str,
+              image_paths: list[str] | str | None = None,
+              cids: list[str] | None = None) -> bool:
     user, pw, recipient = load_smtp()
     if not user or not pw or not recipient:
         print("ERROR: SMTP not configured", file=sys.stderr)
         return False
-    if image_path and os.path.exists(image_path):
+    if isinstance(image_paths, str):
+        image_paths = [image_paths]
+    image_paths = image_paths or []
+    cids = cids or [f"infographic{i}" for i in range(len(image_paths))]
+    if image_paths:
         alt = MIMEMultipart("alternative")
         alt.attach(MIMEText("HTML 郵件 — 請啟用 HTML 顯示。", "plain", "utf-8"))
         alt.attach(MIMEText(html, "html", "utf-8"))
         msg = MIMEMultipart("related")
         msg.attach(alt)
-        with open(image_path, "rb") as fh:
-            img = MIMEImage(fh.read())
-        img.add_header("Content-ID", f"<{cid}>")
-        img.add_header("Content-Disposition", "inline",
-                       filename=os.path.basename(image_path))
-        msg.attach(img)
+        for i, ip in enumerate(image_paths):
+            if not ip or not os.path.exists(ip):
+                continue
+            with open(ip, "rb") as fh:
+                img = MIMEImage(fh.read())
+            cid = cids[i] if i < len(cids) else f"infographic{i}"
+            img.add_header("Content-ID", f"<{cid}>")
+            img.add_header("Content-Disposition", "inline",
+                           filename=os.path.basename(ip))
+            msg.attach(img)
     else:
         msg = MIMEMultipart("alternative")
         alt = MIMEMultipart("alternative")
