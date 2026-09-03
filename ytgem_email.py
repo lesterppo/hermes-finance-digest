@@ -74,7 +74,8 @@ def build_html(date_str: str, results: list[dict], meta: dict) -> str:
         info_html = ("<h3>📌 今日重點一覽</h3>"
                      f"<img class='infographic' src='cid:{meta['infographic_cid']}' "
                      f"alt='digest infographic'/>"
-                     "<div class='cap'>圖表由 Gemini 圖像生成（web）產生。</div>")
+                     "<div class='cap'>方向分佈圖由當日影片分析數據本地渲染"
+                     "（matplotlib）：▲ 看多 · ▼ 看空 · ◆ 中性/事件。</div>")
     return f"""<html><head><meta charset="utf-8">{css}</head><body>
 <h1>📊 財經頻道每日深度分析 — {date_str}</h1>
 <div class="meta">分析引擎：Gemini Flash + Extended Thinking（webapi）
