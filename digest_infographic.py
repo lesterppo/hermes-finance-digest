@@ -42,8 +42,30 @@ def _shorten(s: str, n: int) -> str:
 
 def gen_image(prompt: str, out_dir: str, timeout: int = 280,
               retries: int = 2) -> str | None:
-    """Run gemini.py --img, return newest PNG path or None."""
+    """Run gemini.py --img, return newest PNG path or None.
+
+    Google rotates __Secure-1PSIDTS server-side frequently (esp. after
+    image-gen bursts). Before each attempt, re-scan the local Firefox cookie
+    DB (browser_cookie3, no browser launch) so every attempt uses fresh
+    cookies. On CI there is no browser — falls back to the env cookies that
+    the workflow just pushed."""
     os.makedirs(out_dir, exist_ok=True)
+
+    def _fresh_env() -> dict:
+        env = dict(os.environ)
+        try:
+            import browser_cookie3
+            cj = browser_cookie3.firefox(domain_name=".google.com")
+            d = {c.name: c.value for c in cj
+                 if c.name in ("__Secure-1PSID", "__Secure-1PSIDTS")}
+            if d.get("__Secure-1PSID"):
+                env["GEMINI_SID"] = d["__Secure-1PSID"]
+                env["GEMINI_TS"] = d.get("__Secure-1PSIDTS",
+                                         env.get("GEMINI_TS", ""))
+        except Exception:
+            pass  # CI: keep env cookies
+        return env
+
     before = set(glob.glob(os.path.join(out_dir, "*.png")))
     args = [sys.executable if GEMINI_SCRIPT.endswith(".py") else GEMINI_SCRIPT,
             GEMINI_SCRIPT,
@@ -51,7 +73,7 @@ def gen_image(prompt: str, out_dir: str, timeout: int = 280,
     for attempt in range(retries + 1):
         try:
             proc = subprocess.run(args, capture_output=True, text=True,
-                                  timeout=timeout)
+                                  timeout=timeout, env=_fresh_env())
             try:
                 parsed = json.loads(proc.stdout.strip() or "{}")
             except json.JSONDecodeError:
