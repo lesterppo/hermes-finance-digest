@@ -36,6 +36,12 @@ jobs:
           printf '{"__Secure-1PSID":"%s","__Secure-1PSIDTS":"%s"}\n' \
             "$GEMINI_SID" "$GEMINI_TS" > ~/.gemini-cli/auth.json
 
+      - name: Restore seen-videos state
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/.hermes/yt_gem_seen.json
+          key: yt-gem-seen-v1
+
       - name: Run digest
         env:
           YT_GEM_SMTP_USER: ${{ secrets.YT_GEM_SMTP_USER }}

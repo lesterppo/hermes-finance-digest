@@ -336,10 +336,17 @@ def analyze_video(video: dict, persona: str, auth: dict,
                             return {"video_id": video["video_id"], "title": video["title"],
                                     "channel": video["channel"], "url": video["url"],
                                     "analysis": analysis, "ok": True}
+                        last_error = (f"ok but analysis short/missing "
+                                      f"({len(analysis or '')} chars)")
+                    else:
+                        # Structured failure from gemini.py (e.g. AUTH_EXPIRED,
+                        # RATE_LIMIT) — surface the err category, don't swallow it.
+                        last_error = f"gemini err={stdout_json.get('err') or 'unknown'}"
                 except (json.JSONDecodeError, KeyError):
-                    pass
+                    last_error = f"unparseable stdout: {result.stdout[:150]}"
 
-            last_error = f"exit={result.returncode} stderr: {result.stderr[:200]}"
+            if result.returncode != 0:
+                last_error = f"exit={result.returncode} stderr: {result.stderr[:200]}"
 
         except subprocess.TimeoutExpired:
             last_error = "timeout"
