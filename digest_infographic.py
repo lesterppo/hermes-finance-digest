@@ -40,7 +40,7 @@ def _shorten(s: str, n: int) -> str:
     return s if len(s) <= n else s[: n - 1].rstrip(" ,;:.—-") + "…"
 
 
-def gen_image(prompt: str, out_dir: str, timeout: int = 150,
+def gen_image(prompt: str, out_dir: str, timeout: int = 280,
               retries: int = 2) -> str | None:
     """Run gemini.py --img, return newest PNG path or None."""
     os.makedirs(out_dir, exist_ok=True)
