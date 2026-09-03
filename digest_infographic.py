@@ -556,3 +556,180 @@ def matplotlib_available() -> bool:
 def _noop():
     import matplotlib  # noqa: F401 — keep pyflakes quiet on renderer imports
     matplotlib.use("Agg")
+
+
+# ── NotebookLM infographic path ─────────────────────────────────────────────
+
+NLM_CLI = os.path.expanduser("~/.hermes/scripts/nlm.py")
+
+
+def _nlm(args: list[str], timeout: int = 120) -> dict:
+    """Run nlm.py with JSON output; raise on error."""
+    import subprocess
+    r = subprocess.run([sys.executable, NLM_CLI] + args,
+                       capture_output=True, text=True, timeout=timeout)
+    try:
+        d = json.loads(r.stdout.strip() or "{}")
+    except json.JSONDecodeError:
+        d = {"s": "err", "e": (r.stdout + r.stderr)[:300]}
+    if d.get("s") != "ok":
+        raise RuntimeError(f"nlm {args[0]}: {d.get('e', '')[:200]}")
+    return d
+
+
+def nlm_ensure_notebook(title: str) -> str:
+    """Create a NotebookLM notebook if absent (idempotent per title)."""
+    d = _nlm(["notebook", "list"])
+    for nb in d.get("notebooks", []):
+        if nb.get("title") == title:
+            return nb["id"]
+    d = _nlm(["notebook", "create", title])
+    return d["id"]
+
+
+def nlm_add_text_sources(nb: str, sources: list[dict]) -> int:
+    """Add text sources; returns count added. Skips on per-source failure."""
+    n = 0
+    for s in sources:
+        try:
+            _nlm(["src", "add", "--type", "text", "--title", s["title"][:90],
+                  s["text"], "-n", nb], timeout=120)
+            n += 1
+        except RuntimeError as e:
+            print(f"[nlm] source skip: {e}", file=sys.stderr)
+    return n
+
+
+def nlm_add_youtube_sources(nb: str, sources: list[dict]) -> int:
+    n = 0
+    for s in sources:
+        try:
+            _nlm(["src", "add", "--type", "youtube",
+                  "--title", s["title"][:90], s["url"], "-n", nb], timeout=120)
+            n += 1
+        except RuntimeError as e:
+            print(f"[nlm] source skip: {e}", file=sys.stderr)
+    return n
+
+
+def nlm_generate_infographic(nb: str, instructions: str,
+                             timeout: int = 420) -> str:
+    """Generate an infographic artifact; returns the CDN image URL.
+    Re-authenticates once on session expiry. Idempotent per notebook per
+    run-cycle: if today's artifact already exists, return its URL instead
+    of regenerating."""
+    import subprocess
+    # reuse: check for an existing completed Infographic created today
+    try:
+        d = _nlm(["art", "list", "-n", nb])
+        from datetime import datetime as _dt
+        today = _dt.now().strftime("%Y-%m-%d")
+        for a in d.get("artifacts", []):
+            if (a.get("type") == "Infographic"
+                    and a.get("status") == "completed"
+                    and str(a.get("created_at", "")).startswith(today)):
+                g = _nlm(["art", "get", a["id"], "-n", nb])
+                # art get doesn't return url; fall through to generate only
+                # if we can't obtain one
+                url = g.get("url", "")
+                if url:
+                    return url
+    except Exception:
+        pass
+    for attempt in (1, 2):
+        try:
+            d = _nlm(["art", "generate", "infographic", instructions,
+                      "--wait", "-n", nb], timeout=timeout)
+            return d.get("url", "")
+        except RuntimeError as e:
+            if attempt == 1 and ("Authentication" in str(e) or
+                                 "UNEXPECTED_ERROR" in str(e)):
+                try:
+                    _nlm(["auth", "init"], timeout=180)
+                except Exception:
+                    pass
+                continue
+            raise
+    return ""
+
+
+def nlm_download_image(url: str, out_path: str) -> str:
+    """Download a NotebookLM CDN image (auth + multi-hop redirects) via
+    Playwright APIRequestContext with real browser session cookies.
+    (curl_cffi/urllib hit a Google consent/login wall.)"""
+    if not url:
+        raise RuntimeError("empty url")
+    import asyncio
+    import browser_cookie3
+
+    def norm_cookies():
+        """Browser cookies locally; storage_state.json (CI) otherwise."""
+        raw = None
+        try:
+            cj = browser_cookie3.firefox(domain_name=".google.com")
+            raw = [{"name": c.name, "value": c.value, "domain": c.domain,
+                    "path": c.path, "expires": c.expires,
+                    "secure": bool(c.secure)}
+                   for c in cj if c.domain.endswith("google.com")]
+        except Exception:
+            raw = None
+        if not raw:
+            ss = os.path.expanduser(
+                "~/.notebooklm/profiles/default/storage_state.json")
+            try:
+                with open(ss) as f:
+                    raw = json.load(f).get("cookies", [])
+            except Exception:
+                raw = []
+        cookies = []
+        for c in raw:
+            if not c.get("domain", "").endswith("google.com"):
+                continue
+            e = c.get("expires")
+            exp = -1
+            if e:
+                try:
+                    exp = int(e)
+                except Exception:
+                    exp = -1
+                if exp > 253402300799:
+                    exp //= 1000
+                if exp <= 0:
+                    exp = -1
+            cookies.append({"name": c.get("name"), "value": c.get("value"),
+                            "domain": c.get("domain"), "path": c.get("path") or "/",
+                            "expires": exp, "secure": bool(c.get("secure")),
+                            "httpOnly": False})
+        return cookies
+
+    async def run():
+        from playwright.async_api import async_playwright
+        async with async_playwright() as p:
+            b = await p.chromium.launch(headless=True, args=["--no-sandbox"])
+            ctx = await b.new_context()
+            await ctx.add_cookies(norm_cookies())
+            r = await ctx.request.get(url, max_redirects=10, timeout=90000)
+            body = await r.body()
+            await b.close()
+            if r.status != 200 or body[:4] != b"\x89PNG":
+                raise RuntimeError(f"download failed: HTTP {r.status} "
+                                   f"({body[:6]!r})")
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            with open(out_path, "wb") as f:
+                f.write(body)
+            return out_path
+
+    return asyncio.run(run())
+
+
+def nlm_arxiv_sources(papers: list[dict]) -> list[dict]:
+    """Text sources from parsed paper dicts (URL adds fail rpc_code=9)."""
+    return [{"title": f"{p['id']} — {_shorten(p['title'], 55)}",
+             "text": (f"arXiv paper {p['id']}: {p['title']}\n"
+                      f"AGENT score (agent-harness applicability): "
+                      f"{p.get('agent', '?')}/5\n"
+                      f"TUNE score (trainability on free Colab T4): "
+                      f"{p.get('tune', '?')}/5\n"
+                      f"Link: https://arxiv.org/abs/{p['id']}\n"
+                      f"Summary: {p.get('summary', '')[:600]}")}
+            for p in papers]

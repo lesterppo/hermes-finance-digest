@@ -74,7 +74,7 @@ def build_html(date_str: str, results: list[dict], meta: dict) -> str:
         [meta["infographic_cid"]] if meta.get("infographic_cid") else [])
     labels = ["方向分佈圖 — 由當日影片分析數據本地渲染（matplotlib）："
               "▲ 看多 · ▼ 看空 · ◆ 中性/事件",
-              "AI 市場脈搏儀表板 — Gemini 圖像生成（基於同一份影片數據）"]
+              "市場脈搏儀表板 — Gemini NotebookLM 依 attached 影片來源生成"]
     if cids:
         info_html = "<h3>📌 今日重點一覽</h3>"
         for i, cid in enumerate(cids):
@@ -96,8 +96,8 @@ def build_html(date_str: str, results: list[dict], meta: dict) -> str:
 
 def make_infographics(results: list[dict]) -> list[str]:
     """Conclusion infographics: (1) matplotlib data-viz pulse panel,
-    (2) Gemini image-gen dashboard with rich context. Both returned when
-    they succeed; each fails independently."""
+    (2) Gemini NotebookLM dashboard grounded in the video sources
+    (dedicated daily notebook, YouTube links + takeaways attached)."""
     if infographic is None:
         return []
     out = []
@@ -112,17 +112,38 @@ def make_infographics(results: list[dict]) -> list[str]:
         img = infographic.render_videos_chart(items, title="財經影片今日重點")
         if img:
             out.append(img)
-        # 2. gemini image-gen with rich context
-        prompt = infographic.build_videos_prompt("財經影片今日重點", items)
-        if prompt:
-            gem = infographic.gen_image(
-                prompt, os.path.join(infographic.OUT_ROOT, "ytgem"),
-                retries=1, timeout=280)
-            if gem:
-                out.append(gem)
+        # 2. NotebookLM infographic grounded in attached video sources
+        try:
+            from datetime import datetime as _dt
+            nb_title = (f"Finance YouTube Daily Digest — "
+                        f"{_dt.now().strftime('%Y-%m-%d')}")
+            nb = infographic.nlm_ensure_notebook(nb_title)
+            srcs = [{"title": f"{it.get('channel','')}: "
+                               f"{_shorten(it.get('title',''), 50)}",
+                     "url": it["url"]}
+                    for it in items if it.get("url")]
+            n = infographic.nlm_add_youtube_sources(nb, srcs[:6])
+            print(f"[infographic] notebooklm: {n} sources attached", file=sys.stderr)
+            inst = infographic.videos_notebook_context(
+                items[:6], _dt.now().strftime("%Y-%m-%d"))
+            url = infographic.nlm_generate_infographic(nb, inst)
+            if url:
+                img_path = infographic.nlm_download_image(
+                    url, os.path.join(infographic.OUT_ROOT, "ytgem",
+                                      f"nlm_{_dt.now().strftime('%Y%m%d-%H%M')}.png"))
+                out.append(img_path)
+        except Exception as e:  # noqa: BLE001
+            print(f"[infographic] notebooklm failed (continues): {e}",
+                  file=sys.stderr)
     except Exception as e:  # noqa: BLE001
         print(f"[infographic] partial failure: {e}", file=sys.stderr)
     return out
+
+
+def _shorten(s: str, n: int) -> str:
+    import re as _re
+    s = _re.sub(r"\s+", " ", s or "").strip()
+    return s if len(s) <= n else s[: n - 1].rstrip(" ,;:.—-") + "…"
 
 
 def make_infographic(results: list[dict]) -> str | None:

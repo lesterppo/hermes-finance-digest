@@ -36,6 +36,15 @@ jobs:
           printf '{"__Secure-1PSID":"%s","__Secure-1PSIDTS":"%s"}\n' \
             "$GEMINI_SID" "$GEMINI_TS" > ~/.gemini-cli/auth.json
 
+      - name: Setup NotebookLM session (storage state)
+        env:
+          NLM_STORAGE_STATE_GZ: ${{ secrets.NLM_STORAGE_STATE_GZ }}
+        run: |
+          mkdir -p ~/.notebooklm/profiles/default
+          printf '%s' "$NLM_STORAGE_STATE_GZ" | base64 -d | gunzip > \
+            ~/.notebooklm/profiles/default/storage_state.json
+          python3 -c "import json;d=json.load(open('$HOME/.notebooklm/profiles/default/storage_state.json'));print('nlm cookies:',len(d.get('cookies',[])))"
+
       - name: Restore seen-videos state
         uses: actions/cache@v4
         with:

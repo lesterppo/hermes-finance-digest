@@ -1,1 +1,2 @@
 requests>=2.31.0,<3
+notebooklm-py>=0.8.1
