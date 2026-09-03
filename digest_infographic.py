@@ -46,6 +46,7 @@ def gen_image(prompt: str, out_dir: str, timeout: int = 150,
     os.makedirs(out_dir, exist_ok=True)
     before = set(glob.glob(os.path.join(out_dir, "*.png")))
     args = [sys.executable if GEMINI_SCRIPT.endswith(".py") else GEMINI_SCRIPT,
+            GEMINI_SCRIPT,
             "--img", prompt, "--save-images", out_dir, "--json", "-q"]
     for attempt in range(retries + 1):
         try:
