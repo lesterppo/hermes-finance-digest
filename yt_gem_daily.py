@@ -409,6 +409,35 @@ Check Time: {start_time.strftime('%Y-%m-%d %H:%M:%S')} UTC
 def _send_report_email(channels: dict, results: list[dict],
                        ok_count: int, start_time: datetime) -> None:
     date_str = start_time.strftime("%Y年%m月%d日")
+
+    # Conclusion infographic (Gemini web image gen) — skip on any failure
+    img_path = None
+    try:
+        import ytgem_email
+        img_path = ytgem_email.make_infographic(results)
+        if img_path:
+            log(f"Infographic: {img_path}")
+        else:
+            log("Infographic: skipped")
+    except Exception as e:  # noqa: BLE001
+        log(f"Infographic skipped: {e}")
+
+    subject = f"📊 Finance Daily Deep Analysis — {date_str}"
+    try:
+        import ytgem_email
+        html = ytgem_email.build_html(
+            date_str, results,
+            {"infographic_cid": "infographic" if img_path else None,
+             "channel_count": len(channels)})
+        sent = ytgem_email.send_html(subject, html, image_path=img_path)
+        if sent:
+            log(f"HTML email sent"
+                + (" (+infographic)" if img_path else ""))
+            return
+        log("HTML email failed — falling back to plain text")
+    except ImportError:
+        log("ytgem_email module missing — plain text fallback")
+
     channel_list = "\n".join(f"  • {h}" for h in channels)
 
     video_sections: list[str] = []
