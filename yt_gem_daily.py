@@ -431,7 +431,7 @@ def _send_report_email(channels: dict, results: list[dict],
              "channel_count": len(channels)})
         sent = ytgem_email.send_html(subject, html, image_path=img_path)
         if sent:
-            log(f"HTML email sent"
+            log("HTML email sent"
                 + (" (+infographic)" if img_path else ""))
             return
         log("HTML email failed — falling back to plain text")
