@@ -573,7 +573,8 @@ def _nlm(args: list[str], timeout: int = 120) -> dict:
     except json.JSONDecodeError:
         d = {"s": "err", "e": (r.stdout + r.stderr)[:300]}
     if d.get("s") != "ok":
-        raise RuntimeError(f"nlm {args[0]}: {d.get('e', '')[:200]}")
+        msg = d.get("e") or d.get("message") or (r.stdout + r.stderr)[:250]
+        raise RuntimeError(f"nlm {args[0]}: {str(msg)[:250]}")
     return d
 
 
