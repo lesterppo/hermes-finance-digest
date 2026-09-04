@@ -23,8 +23,10 @@ SMTP_PORT = 465
 
 
 def load_smtp() -> tuple[str, str, str]:
-    user = os.environ.get("SMTP_USER", "<redacted-email>")
-    pw = os.environ.get("SMTP_PASS", "")
+    user = (os.environ.get("SMTP_USER")
+            or os.environ.get("YT_GEM_SMTP_USER", ""))
+    pw = (os.environ.get("SMTP_PASS")
+          or os.environ.get("YT_GEM_SMTP_PASS", ""))
     if not pw:
         try:
             with open(os.path.expanduser(
@@ -32,7 +34,8 @@ def load_smtp() -> tuple[str, str, str]:
                 pw = f.read().strip().replace(" ", "")
         except FileNotFoundError:
             pw = ""
-    recipient = os.environ.get("RECIPIENT", "<redacted-email>")
+    recipient = (os.environ.get("RECIPIENT")
+                 or os.environ.get("YT_GEM_RECIPIENT", ""))
     return user, pw, recipient
 
 
