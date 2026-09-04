@@ -414,12 +414,10 @@ def _send_report_email(channels: dict, results: list[dict],
     img_path = None
     try:
         import ytgem_email
-        img_path = ytgem_email.make_infographic(results)
-        if img_path:
-            log(f"Infographic: {img_path}")
-        else:
-            log("Infographic: skipped")
+        img_paths = ytgem_email.make_infographics(results)
+        log("Infographics: " + (", ".join(img_paths) if img_paths else "skipped"))
     except Exception as e:  # noqa: BLE001
+        img_paths = []
         log(f"Infographic skipped: {e}")
 
     subject = f"📊 Finance Daily Deep Analysis — {date_str}"
@@ -427,12 +425,12 @@ def _send_report_email(channels: dict, results: list[dict],
         import ytgem_email
         html = ytgem_email.build_html(
             date_str, results,
-            {"infographic_cid": "infographic" if img_path else None,
+            {"infographic_cids": [f"infographic{i}" for i in range(len(img_paths))],
              "channel_count": len(channels)})
-        sent = ytgem_email.send_html(subject, html, image_path=img_path)
+        sent = ytgem_email.send_html(subject, html, image_paths=img_paths)
         if sent:
             log("HTML email sent"
-                + (" (+infographic)" if img_path else ""))
+                + (f" (+{len(img_paths)} infographics)" if img_paths else ""))
             return
         log("HTML email failed — falling back to plain text")
     except ImportError:
