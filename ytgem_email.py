@@ -123,9 +123,14 @@ def make_infographics(results: list[dict]) -> list[str]:
             nb = infographic.nlm_ensure_notebook(nb_title)
             srcs = [{"title": f"{it.get('channel','')}: "
                                f"{_shorten(it.get('title',''), 50)}",
-                     "url": it["url"]}
-                    for it in items if it.get("url")]
-            n = infographic.nlm_add_youtube_sources(nb, srcs[:6])
+                     "text": (f"Channel: {it.get('channel','')}\n"
+                              f"Video title: {it.get('title','')}\n"
+                              f"YouTube URL: {it.get('url','')}\n"
+                              f"Today's takeaway: {it.get('verdict','')}\n"
+                              f"Direction: "
+                              f"{ {1:'bullish',-1:'bearish'}.get(it.get('direction'), 'neutral/event') }")}
+                    for it in items[:6]]
+            n = infographic.nlm_add_text_sources(nb, srcs)
             print(f"[infographic] notebooklm: {n} sources attached", file=sys.stderr)
             inst = infographic.videos_notebook_context(
                 items[:6], _dt.now().strftime("%Y-%m-%d"))
