@@ -312,6 +312,27 @@ def matplotlib_available() -> bool:
         return False
 
 
+def extract_verdicts_from_analyses(analyses: list[dict]) -> list[dict]:
+    """Pull a short takeaway per video analysis: first bold/header line or
+    first sentence clause. analyses: [{title, analysis, ok}]"""
+    out = []
+    for a in analyses:
+        if not a.get("ok"):
+            continue
+        text = a.get("analysis") or ""
+        verdict = ""
+        for pat in (r"^#+\s*(.+)$", r"\*\*(.{4,60}?)\*\*"):
+            m = re.search(pat, text, re.M)
+            if m:
+                verdict = m.group(1)
+                break
+        if not verdict:
+            m = re.search(r"([^。！？\n]{6,40})[。！？]?", text)
+            verdict = m.group(1) if m else a.get("title", "")
+        out.append({"title": a.get("title", ""), "verdict": verdict})
+    return out
+
+
 def build_arxiv_prompt(score_lines: list[str], n_recommended: int = 0,
                        papers: list[dict] | None = None,
                        digest_text: str = "") -> str:
@@ -678,14 +699,18 @@ def nlm_download_image(url: str, out_path: str) -> str:
     return asyncio.run(run())
 
 
-def nlm_arxiv_sources(papers: list[dict]) -> list[dict]:
-    """Text sources from parsed paper dicts (URL adds fail rpc_code=9)."""
-    return [{"title": f"{p['id']} — {_shorten(p['title'], 55)}",
-             "text": (f"arXiv paper {p['id']}: {p['title']}\n"
-                      f"AGENT score (agent-harness applicability): "
-                      f"{p.get('agent', '?')}/5\n"
-                      f"TUNE score (trainability on free Colab T4): "
-                      f"{p.get('tune', '?')}/5\n"
-                      f"Link: https://arxiv.org/abs/{p['id']}\n"
-                      f"Summary: {p.get('summary', '')[:600]}")}
-            for p in papers]
+def nlm_arxiv_sources(papers: list[dict], notes: str = "") -> list[dict]:
+    """Content-rich text sources: summary + the digest's own analysis notes
+    for that paper (URL adds fail rpc_code=9)."""
+    out = []
+    for p in papers:
+        note = ""
+        if notes and p["id"] in notes:
+            seg = notes[notes.index(p["id"]):]
+            note = f"\nDigest analysis notes:\n{seg[:1400]}"
+        out.append({
+            "title": f"{p['id']} — {_shorten(p['title'], 55)}",
+            "text": (f"arXiv paper {p['id']}: {p['title']}\n"
+                     f"Link: https://arxiv.org/abs/{p['id']}\n"
+                     f"Summary: {p.get('summary', '')[:800]}{note}")})
+    return out
