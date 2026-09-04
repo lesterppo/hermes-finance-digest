@@ -647,6 +647,10 @@ def nlm_generate_infographic(nb: str, instructions: str,
                       "--wait", "-n", nb], timeout=timeout)
             return d.get("url", "")
         except RuntimeError as e:
+            if "RateLimitError" in str(e) or "rate" in str(e).lower():
+                print("[nlm] NotebookLM daily artifact cap reached — "
+                      "infographic skipped today", file=sys.stderr)
+                return ""
             if attempt == 1 and ("Authentication" in str(e) or
                                  "UNEXPECTED_ERROR" in str(e)):
                 try:
