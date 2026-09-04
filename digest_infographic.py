@@ -40,6 +40,10 @@ def _shorten(s: str, n: int) -> str:
     return s if len(s) <= n else s[: n - 1].rstrip(" ,;:.—-") + "…"
 
 
+def stamp() -> str:
+    return datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
 def gen_image(prompt: str, out_dir: str, timeout: int = 280,
               retries: int = 2) -> str | None:
     """Run gemini.py --img, return newest PNG path or None.
@@ -96,6 +100,217 @@ def gen_image(prompt: str, out_dir: str, timeout: int = 280,
 
 
 # ── arXiv digest infographic ───────────────────────────────────────────────
+
+
+# ── Data-driven infographic renderer (matplotlib) ───────────────────────────
+
+NAVY = "#0f1b2d"
+TEAL = "#14b8a6"
+GREEN = "#22c55e"
+AMBER = "#f59e0b"
+REDX = "#ef4444"
+CARD = "#f1f5f9"
+GRID = "#334155"
+
+_FONTS = None
+
+
+def _setup_fonts():
+    """Register preferred CJK font for Chinese labels (yt digest)."""
+    global _FONTS
+    if _FONTS is not None:
+        return _FONTS
+    from matplotlib import font_manager
+    have = {f.name for f in font_manager.fontManager.ttflist}
+    pref = (["Noto Sans CJK TC", "Noto Sans CJK SC", "Noto Sans CJK HK",
+             "Noto Sans CJK JP", "Droid Sans Fallback",
+             "DejaVu Sans"] + sorted(have))
+    chosen = next((f for f in dict.fromkeys(pref) if f in have), "DejaVu Sans")
+    _FONTS = chosen
+    return _FONTS
+
+
+def _to_png(fig, out, dpi=200, tight=None):
+    """Save figure. NOTE: no tight_layout/bbox-tight — they clip y-tick labels
+    and transAxes texts. Margins are set explicitly by the render functions."""
+    import matplotlib.pyplot as plt
+    fig.savefig(out, dpi=dpi, facecolor=fig.get_facecolor(),
+                transparent=False)
+    plt.close(fig)
+    return out
+
+
+def render_arxiv_chart(score_lines: list[str], n_recommended: int = 1,
+                       filedate: str = "") -> str | None:
+    """Parse AGENT/TUNE score lines, draw a horizontal grouped bar chart
+    sorted high→low, value labels + top-pick callout + footer stats."""
+    import matplotlib
+    matplotlib.use("Agg")
+    from matplotlib import pyplot as plt
+    _setup_fonts()
+    plt.rcParams["font.family"] = _FONTS
+    plt.rcParams["axes.unicode_minus"] = False
+
+    parsed = parse_score_lines(score_lines)
+    if not parsed:
+        return None
+    parsed = parsed[:8]
+    parsed.sort(key=lambda p: max(p["agent"], p["tune"]), reverse=True)
+
+    labels = [_shorten(p["title"], 34) for p in parsed]
+    agent = [p["agent"] for p in parsed]
+    tune = [p["tune"] for p in parsed]
+    y = list(range(len(parsed)))
+
+    h = 3.2 + 0.62 * len(parsed)
+    fig, ax = plt.subplots(figsize=(9.2, h), facecolor=NAVY)
+    ax.set_facecolor(NAVY)
+    fig.suptitle("arXiv cs.AI Daily Picks — AGENT vs TUNE",
+                 x=0.02, y=0.99, ha="left", fontsize=17,
+                 fontweight="bold", color="white")
+    subtitle = filedate or datetime.now().strftime("%Y-%m-%d")
+    ax.text(-0.06, 1.2, subtitle, transform=ax.transAxes,
+            fontsize=9, color=GRID)
+
+    ax.barh([y[i] + 0.2 for i in range(len(parsed))], agent, height=0.38,
+            color=TEAL, label="AGENT", alpha=0.95, zorder=3)
+    ax.barh([y[i] - 0.2 for i in range(len(parsed))], tune, height=0.38,
+            color=GREEN, label="TUNE", alpha=0.85, zorder=3)
+    for i in range(len(parsed)):
+        ax.text(agent[i] + 0.08, y[i] + 0.2, f"{agent[i]:g}", va="center",
+                fontsize=10, color="white", fontweight="bold")
+        ax.text(tune[i] + 0.08, y[i] - 0.2, f"{tune[i]:g}", va="center",
+                fontsize=10, color="white", fontweight="bold")
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels, fontsize=11, color="white")
+    ax.tick_params(axis="y", colors="white", labelcolor="white")
+    for lbl in ax.get_yticklabels():
+        lbl.set_color("white")
+        lbl.set_fontsize(11)
+    fig.subplots_adjust(left=0.30)
+    ax.set_xlim(0, 5.6)
+    ax.set_xticks([0, 1, 2, 3, 4, 5])
+    ax.set_xticklabels(["0", "1", "2", "3", "4", "5"], fontsize=10, color=GRID)
+    ax.set_xlabel("score / 5", fontsize=10, color=GRID)
+    ax.grid(axis="x", color=GRID, alpha=0.35, linestyle="--", zorder=0)
+    ax.tick_params(axis="y", colors="white")
+    ax.spines[["top", "right", "left"]].set_visible(False)
+    ax.spines["bottom"].set_color(GRID)
+
+    n_rec_disp = int(n_recommended) if n_recommended else 1
+    rank_txt = (f"#{1}  {parsed[0]['id']}  ·  AGENT {parsed[0]['agent']:g} / "
+                f"TUNE {parsed[0]['tune']:g}  —  top pick")
+    ax.text(-0.06, 1.44, rank_txt, transform=ax.transAxes,
+            fontsize=11, color=AMBER, fontweight="bold")
+    ax.text(-0.06, -0.06,
+            f"{len(parsed)} papers · {n_rec_disp} recommended · "
+            "agent = agent-harness use · tune = trainable on a T4",
+            transform=ax.transAxes, fontsize=9, color=GRID)
+    ax.legend(loc="upper right", fontsize=9, frameon=False,
+              labelcolor="white", ncol=2)
+
+    out = os.path.join(OUT_ROOT, "arxiv", f"chart_{stamp()}.png")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    return _to_png(fig, out)
+
+
+def verdict_direction(text: str) -> int:
+    """Classify a takeaway text as bullish (+1) / bearish (-1) / neutral (0)."""
+    up = ("利好", "上升", "上漲", "漲", "升", "反彈", "走強", "突破", "看多",
+          "樂觀", "買入", "加倉", "強勢", "回暖", "上揚", "bullish", "rally",
+          "surge", "gain", "beat", "看漲")
+    down = ("利空", "下跌", "下挫", "跌", "走弱", "承壓", "回落", "看空",
+            "悲觀", "賣出", "減倉", "逃離", "風險", "受壓", "bearish", "crash",
+            "drop", "sink", "fear", "大跌", "壓抑", "壓力", "高企")
+    ups = sum(1 for k in up if k in text)
+    downs = sum(1 for k in down if k in text)
+    if ups > downs:
+        return 1
+    if downs > ups:
+        return -1
+    return 0
+
+
+def render_videos_chart(items: list[dict], title: str = "",
+                        filedate: str = "") -> str | None:
+    """Pulse panel: sentiment split bar + takeaway list with marks."""
+    import matplotlib
+    matplotlib.use("Agg")
+    from matplotlib import pyplot as plt
+    _setup_fonts()
+    plt.rcParams["font.family"] = _FONTS
+    plt.rcParams["axes.unicode_minus"] = False
+
+    if not items:
+        return None
+    items = items[:6]
+    for it in items:
+        it.setdefault("direction", verdict_direction(
+            (it.get("verdict") or "") + " " + (it.get("title") or "")))
+    n_bull = sum(1 for it in items if it.get("direction") == 1)
+    n_bear = sum(1 for it in items if it.get("direction") == -1)
+    n_neut = len(items) - n_bull - n_bear
+
+    fig, (axb, axl) = plt.subplots(
+        1, 2, figsize=(9.4, 3.6), dpi=200,
+        gridspec_kw={"width_ratios": [2.3, 3.2]}, facecolor=NAVY)
+    for ax in (axb, axl):
+        ax.set_facecolor(NAVY)
+    cats = [(GREEN, n_bull, "bullish"),
+            (REDX, n_bear, "bearish"),
+            (GRID, n_neut, "neutral")]
+    tot = sum(v for _, v, _ in cats) or 1
+    left = 0
+    for c, v, label in cats:
+        if v <= 0:
+            continue
+        axb.barh(0.5, v / tot * 0.9, left=left, color=c, height=0.5,
+                 edgecolor=NAVY, linewidth=1.2)
+        axb.text(left + (v / tot * 0.45), 0.5, str(v), ha="center",
+                 va="center", fontsize=16, fontweight="bold", color="white")
+        if v / tot > 0.18:
+            axb.text(left + (v / tot * 0.45), 0.84, label, ha="center",
+                     va="bottom", fontsize=9, color="#8ab4c8")
+        left += v / tot * 0.9
+    axb.set_xlim(0, 0.9)
+    axb.set_ylim(0, 1.3)
+    axb.axis("off")
+    axb.text(0.45, 0.08, f"{n_bull} bull · {n_bear} bear · {n_neut} flat",
+             ha="center", color="white", fontsize=9.5)
+    axb.set_title("今日方向分佈", color="white", fontsize=13,
+                  fontweight="bold", loc="left", pad=14)
+
+    axl.axis("off")
+    axl.text(0, 1.06, title or "財經影片今日重點", transform=axl.transAxes,
+             color="white", fontsize=14, fontweight="bold", va="top")
+    shown = items[:5]
+    step = 0.92 / max(len(shown), 1)
+    for idx, it in enumerate(shown):
+        if it.get("direction") == 1:
+            sym, col = "▲", GREEN
+        elif it.get("direction") == -1:
+            sym, col = "▼", REDX
+        else:
+            sym, col = "◆", TEAL
+        lbl = _shorten(it.get("verdict") or it.get("title") or "", 30)
+        axl.text(0, 0.90 - idx * step, f"{sym}  {lbl}",
+                 transform=axl.transAxes, color=col, fontsize=10.5, va="top")
+    if filedate:
+        axl.text(0, -0.10, f"◆ neutral/event · data {filedate}",
+                 transform=axl.transAxes, color="#8ab4c8", fontsize=8.5)
+
+    out = os.path.join(OUT_ROOT, "ytgem", f"chart_{stamp()}.png")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    return _to_png(fig, out)
+
+
+def matplotlib_available() -> bool:
+    try:
+        import matplotlib  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
 
 def build_arxiv_prompt(score_lines: list[str], n_recommended: int = 0,
                        papers: list[dict] | None = None,
@@ -224,341 +439,67 @@ def build_videos_prompt(channel_label: str, items: list[dict],
 
 
 def arxiv_notebook_context(papers: list[dict], digest_text: str = "") -> str:
-    """Context/instruction block for NotebookLM infographic generation:
-    ranked paper list with scores + summaries."""
+    """Content-summary infographic instructions for the arXiv digest:
+    visualize WHAT the recommended papers actually contribute — their core
+    ideas, methods, and engineering takeaways. No score rankings."""
     lines = []
-    for rank, p in enumerate(papers[:8], 1):
-        lines.append(
-            f"{rank}. {p['id']} — {p['title']} "
-            f"(AGENT {p.get('agent', '?')}/5, TUNE {p.get('tune', '?')}/5)"
-            + (f" — {p.get('summary', '')[:180]}" if p.get("summary") else ""))
+    for p in papers[:6]:
+        line = f"- {p['id']} — {p['title']}"
+        if p.get("summary"):
+            line += f": {p['summary'][:260]}"
+        lines.append(line)
     inst = (
-        "Create a data-dense dark-navy dashboard infographic of today's "
-        "arXiv cs.AI screening for an AI engineer audience. Show a ranked "
-        "leaderboard with one row per paper: rank, arXiv id, short title, "
-        "and two colored score bars (AGENT = agent-harness applicability, "
-        "TUNE = trainability on a free Colab T4), best paper highlighted. "
-        "Add a 'Why it matters' panel with one short takeaway per top paper "
-        "and summary chips (papers screened / recommended). Use the paper "
-        "list below exactly — no invented papers, numbers, or claims.\n\n"
-        + "\n".join(lines))
+        "Create a dark-navy editorial infographic titled 'Today's AI Research "
+        "Briefing — what actually matters' that summarizes the CONTENT of "
+        "today's recommended arXiv cs.AI papers for an AI engineer. This is a "
+        "knowledge summary, NOT a scorecard: do not show numeric scores, "
+        "rankings, leaderboards, or rating bars.\n"
+        "Structure it as 4-6 content cards (one per paper), each card "
+        "containing: the paper's short title, the core idea in one plain-"
+        "English sentence, the key method or mechanism as a tiny labeled "
+        "diagram/icon (e.g. a loop, a flow, a comparison), and one 'use it "
+        "for:' practical takeaway line. Group cards by theme (e.g. agent "
+        "memory, planning, fine-tuning) with small section headers.\n"
+        "Base every statement ONLY on the paper summaries below — no invented "
+        "methods, numbers, or claims. Flat vector, dark navy background, "
+        "teal/amber accents, small crisp text, generous whitespace.\n\n"
+        "Papers (id — title — summary):\n" + "\n".join(lines))
     if digest_text:
-        inst += "\n\nSupporting notes:\n" + digest_text[:1200]
+        inst += "\n\nDeeper notes from the digest (for accurate takeaway "
+        "phrasing):\n" + digest_text[:1400]
     return inst
 
 
 def videos_notebook_context(items: list[dict], date_label: str = "") -> str:
-    """Context/instruction block for NotebookLM infographic generation for
-    the finance video digest: youtube links + takeaways + sentiment split."""
+    """Content-summary infographic instructions for the finance video digest:
+    visualize the actual market narratives and advice from the videos —
+    not sentiment scoring."""
     rows = []
-    for it in items[:8]:
-        d = it.get("direction")
-        word = {1: "bullish", -1: "bearish"}.get(d, "neutral/event")
-        rows.append(f"- [{word}] {it.get('channel', '')}: "
-                    f"{_shorten(it.get('verdict') or it.get('title', ''), 60)}"
-                    f" ({it.get('url', '')})")
-    n_bull = sum(1 for r in rows if "[bullish]" in r)
-    n_bear = sum(1 for r in rows if "[bearish]" in r)
-    n_flat = len(rows) - n_bull - n_bear
+    for it in items[:6]:
+        rows.append(
+            f"- {it.get('channel', '')} — {_shorten(it.get('title', ''), 70)}: "
+            f"{_shorten(it.get('verdict') or '', 140)} "
+            f"({it.get('url', '')})")
     return (
-        "Create a dark-navy financial market-pulse dashboard infographic "
-        "summarizing today's Chinese finance YouTube digest. Include: "
-        "(1) a left panel 'Market direction' with a stacked bar: bullish "
-        f"{n_bull}, bearish {n_bear}, neutral/event {n_flat}; (2) a right "
-        "panel 'Today's takeaways' listing each video with its sentiment "
-        "symbol, channel name, short takeaway, and its YouTube URL in small "
-        "text; (3) a footer listing the channels covered. Bloomberg-terminal "
-        "aesthetic, red/green market semantics, crisp legible text. Use only "
-        "the videos below"
-        + (f" — data date {date_label}" if date_label else "") + ":\n\n"
-        + "\n".join(rows))
+        "Create a dark-navy editorial infographic titled '今日市場焦點 — "
+        "市場敘事與觀點摘要' that summarizes the actual CONTENT of today's "
+        "Chinese finance YouTube videos. This is a knowledge summary, NOT a "
+        "scorecard: do not show sentiment scores, ratings, bull/bear meters, "
+        "or stacked opinion bars.\n"
+        "Structure it as 4-6 narrative cards (one per video), each with: the "
+        "channel name, the video's core narrative in one short Traditional "
+        "Chinese headline, 2-3 bullet facts it presents (tickers, numbers, "
+        "policy names, sectors — only those present in the source text), and "
+        "one '投資視角:' line with the video's stated implication or risk. "
+        "Use small up/down arrows only where the video itself states a "
+        "direction.\n"
+        "Base every statement ONLY on the video summaries below — no "
+        "invented tickers, prices, or claims. Flat vector, dark navy "
+        "background, teal/amber accents, crisp Traditional Chinese text, "
+        "clean card grid."
+        + (f"\nData date: {date_label}." if date_label else "")
+        + "\n\nVideos (channel — title: takeaway):\n" + "\n".join(rows))
 
-
-def extract_verdicts_from_analyses(analyses: list[dict]) -> list[dict]:
-    """Pull a short takeaway per video analysis: first bold/header line or
-    first sentence clause. analyses: [{title, analysis, ok}]"""
-    out = []
-    for a in analyses:
-        if not a.get("ok"):
-            continue
-        text = a.get("analysis") or ""
-        verdict = ""
-        for pat in (r"^#+\s*(.+)$", r"\*\*(.{4,60}?)\*\*"):
-            m = re.search(pat, text, re.M)
-            if m:
-                verdict = m.group(1)
-                break
-        if not verdict:
-            m = re.search(r"([^。！？\n]{6,40})[。！？]?", text)
-            verdict = m.group(1) if m else a.get("title", "")
-        out.append({"title": a.get("title", ""), "verdict": verdict})
-    return out
-
-
-def extract_conclusion_lines(report_text: str, max_lines: int = 4) -> list[str]:
-    """For the finance Pro report: take short bullet-ish lines from the
-    final recommendation section (四/建議/啟示) as verdict labels."""
-    section = ""
-    m = re.search(r"(?:四|投資啟示|建議與?策略|結論)[^\n]*\n(.*?)(?:\n#|\Z)",
-                  report_text, re.S)
-    if m:
-        section = m.group(1)
-    else:
-        section = report_text[-1200:]
-    lines = []
-    for raw in section.splitlines():
-        line = raw.strip().lstrip("-*• ").strip()
-        if len(line) < 6 or line.startswith("#"):
-            continue
-        lines.append(_shorten(line.split("：")[0].split(":")[0], 22))
-        if len(lines) >= max_lines:
-            break
-    return lines
-
-
-def stamp() -> str:
-    return datetime.now().strftime("%Y%m%d-%H%M%S")
-
-
-# ── Data-driven infographic renderer (matplotlib) ───────────────────────────
-# Upgrades content from text-card tiles to REAL data visualization: score bars,
-# rank ordering, value labels, summary stats. Rendered locally = exact text,
-# no image-model garble. Use prefers: matplotlib output; fail back to the
-# Gemini decorative banner only if matplotlib is unavailable.
-
-NAVY = "#0f1b2d"
-TEAL = "#14b8a6"
-GREEN = "#22c55e"
-AMBER = "#f59e0b"
-REDX = "#ef4444"
-CARD = "#f1f5f9"
-GRID = "#334155"
-
-_FONTS = None
-
-
-def _setup_fonts():
-    """Register preferred CJK font for Chinese labels (yt digest)."""
-    global _FONTS
-    if _FONTS is not None:
-        return _FONTS
-    from matplotlib import font_manager
-    have = {f.name for f in font_manager.fontManager.ttflist}
-    pref = (["Noto Sans CJK TC", "Noto Sans CJK SC", "Noto Sans CJK HK",
-             "Noto Sans CJK JP", "Droid Sans Fallback",
-             "DejaVu Sans"] + sorted(have))
-    chosen = next((f for f in dict.fromkeys(pref) if f in have), "DejaVu Sans")
-    _FONTS = chosen
-    return _FONTS
-
-
-def _to_png(fig, out, dpi=200, tight=None):
-    """Save figure. NOTE: no tight_layout/bbox-tight — they clip y-tick labels
-    and suptitles that extend outside the axes box. Margins are set explicitly
-    by the render functions instead. fig.patch alpha is NOT touched: the navy
-    facecolor must stay opaque or the whole figure renders white."""
-    import matplotlib.pyplot as plt
-    fig.savefig(out, dpi=dpi, facecolor=fig.get_facecolor(),
-                transparent=False)
-    plt.close(fig)
-    return out
-
-
-def render_arxiv_chart(score_lines: list[str], n_recommended: int = 1,
-                       filedate: str = "") -> str | None:
-    """Parse AGENT/TUNE score lines, draw a horizontal grouped bar chart sorted
-    high→low by the max of the two scores, export a temp PNG path."""
-    import matplotlib
-    matplotlib.use("Agg")
-    from matplotlib import pyplot as plt
-    _setup_fonts()
-    plt.rcParams["font.family"] = _FONTS
-    plt.rcParams["axes.unicode_minus"] = False
-
-    parsed = []
-    for ln in score_lines:
-        m = re.match(
-            r"[\s*>#-]*\*{0,2}\s*(?:arxiv:?\s*)?(\d{4}\.\d{4,5})\S*\s*\*{0,2}"
-            r"\s*(.+?)\s*[—–-]+\s*\*{0,2}\s*AGENT\s*(\d(?:\.\d)?)\s*/\s*5?"
-            r"\s*\*{0,2}\s*[—–-]+\s*\*{0,2}\s*TUNE\s*(\d(?:\.\d)?)\s*/\s*5?",
-            ln, re.I)
-        if not m:
-            continue
-        pid, title, agent, tune = m.groups()
-        parsed.append({"id": pid, "title": title.strip("* "),
-                       "agent": float(agent), "tune": float(tune)})
-    if len(parsed) < 1:
-        return None
-    # screen to the ones shown (all), cap legend length
-    parsed = parsed[:8]
-    parsed.sort(key=lambda p: max(p["agent"], p["tune"]), reverse=True)
-
-    labels = [f"{p['id'][-2:]}" if False else _shorten(p["title"], 34)
-              for p in parsed]
-    agent = [p["agent"] for p in parsed]
-    tune = [p["tune"] for p in parsed]
-    y = list(range(len(parsed)))
-
-    # canvas + header
-    h = 3.2 + 0.62 * len(parsed)
-    fig, ax = plt.subplots(figsize=(9.2, h), facecolor=NAVY)
-    ax.set_facecolor(NAVY)
-    fig.suptitle("arXiv cs.AI Daily Picks — AGENT vs TUNE",
-                 x=0.02, y=0.99, ha="left", fontsize=17,
-                 fontweight="bold", color="white")
-    subtitle = filedate or datetime.now().strftime("%Y-%m-%d")
-    ax.text(-0.06, 1.02 + 0.18, subtitle, transform=ax.transAxes,
-            fontsize=9, color=GRID)
-
-    ax.barh([y[i] + 0.2 for i in range(len(parsed))], agent, height=0.38,
-            color=TEAL, label="AGENT", alpha=0.95, zorder=3)
-    ax.barh([y[i] - 0.2 for i in range(len(parsed))], tune, height=0.38,
-            color=GREEN, label="TUNE", alpha=0.85, zorder=3)
-    for i in range(len(parsed)):
-        ax.text(agent[i] + 0.08, y[i] + 0.2, f"{agent[i]:g}", va="center",
-                fontsize=10, color="white", fontweight="bold")
-        ax.text(tune[i] + 0.08, y[i] - 0.2, f"{tune[i]:g}", va="center",
-                fontsize=10, color="white", fontweight="bold")
-    ax.set_yticks(y)
-    ax.set_yticklabels(labels, fontsize=11, color="white")
-    ax.tick_params(axis="y", colors="white", labelcolor="white")
-    for lbl in ax.get_yticklabels():
-        lbl.set_color("white")
-        lbl.set_fontsize(11)
-    # ensure labels have room: reserve left margin explicitly
-    fig.subplots_adjust(left=0.30)
-    ax.set_xlim(0, 5.6)
-    ax.set_xticks([0, 1, 2, 3, 4, 5])
-    ax.set_xticklabels(["0", "1", "2", "3", "4", "5"], fontsize=10, color=GRID)
-    ax.set_xlabel("score / 5", fontsize=10, color=GRID)
-    ax.grid(axis="x", color=GRID, alpha=0.35, linestyle="--", zorder=0)
-    ax.tick_params(axis="y", colors="white")
-    ax.spines[["top", "right", "left"]].set_visible(False)
-    ax.spines["bottom"].set_color(GRID)
-
-    # rank callout on top-1 + recommendation count band
-    n_rec_disp = int(n_recommended) if n_recommended else 1
-    rank_txt = (f"#{1}  {parsed[0]['id']}  ·  AGENT {parsed[0]['agent']:g} / "
-                f"TUNE {parsed[0]['tune']:g}  —  top pick")
-    ax.text(-0.06, 1.02 + 0.42, rank_txt, transform=ax.transAxes,
-            fontsize=11, color=AMBER, fontweight="bold")
-    ax.text(-0.06, -0.06 + 0.0,
-            f"{len(parsed)} papers · {n_rec_disp} recommended · "
-            "ag = agent-harness use · tune = trainable on a T4",
-            transform=ax.transAxes, fontsize=9, color=GRID)
-    ax.legend(loc="upper right", fontsize=9, frameon=False,
-              labelcolor="white", ncol=2)
-
-    out = os.path.join(OUT_ROOT, "arxiv", f"chart_{stamp()}.png")
-    os.makedirs(os.path.dirname(out), exist_ok=True)
-    return _to_png(fig, out)
-
-
-def verdict_direction(text: str) -> int:
-    """Classify a takeaway text as bullish (+1) / bearish (-1) / neutral (0)."""
-    up = ("利好", "上升", "上漲", "漲", "升", "反彈", "走強", "突破", "看多",
-          "樂觀", "買入", "加倉", "強勢", "回暖", "上揚", "bullish", "rally",
-          "surge", "gain", "beat", "看漲")
-    down = ("利空", "下跌", "下挫", "跌", "走弱", "承壓", "回落", "看空",
-            "悲觀", "賣出", "減倉", "逃離", "風險", "受壓", "bearish", "crash",
-            "drop", "sink", "fear", "大跌", "壓抑", "壓力", "高企")
-    ups = sum(1 for k in up if k in text)
-    downs = sum(1 for k in down if k in text)
-    if ups > downs:
-        return 1
-    if downs > ups:
-        return -1
-    return 0
-
-
-def render_videos_chart(items: list[dict], title: str = "",
-                        filedate: str = "") -> str | None:
-    """Pulse panel: sentiment split bar (bull/bear/neutral, from
-    verdict_direction) + takeaway list with direction marks."""
-    import matplotlib
-    matplotlib.use("Agg")
-    from matplotlib import pyplot as plt
-    _setup_fonts()
-    plt.rcParams["font.family"] = _FONTS
-    plt.rcParams["axes.unicode_minus"] = False
-
-    if not items:
-        return None
-    items = items[:6]
-    for it in items:
-        it.setdefault("direction", verdict_direction(
-            (it.get("verdict") or "") + " " + (it.get("title") or "")))
-    n_bull = sum(1 for it in items if it.get("direction") == 1)
-    n_bear = sum(1 for it in items if it.get("direction") == -1)
-    n_neut = len(items) - n_bull - n_bear
-
-    fig, (axb, axl) = plt.subplots(
-        1, 2, figsize=(9.4, 3.6), dpi=200,
-        gridspec_kw={"width_ratios": [2.3, 3.2]}, facecolor=NAVY)
-    for ax in (axb, axl):
-        ax.set_facecolor(NAVY)
-    cats = [(GREEN, n_bull, "bullish"),
-            (REDX, n_bear, "bearish"),
-            (GRID, n_neut, "neutral")]
-    tot = sum(v for _, v, _ in cats) or 1
-    left = 0
-    for c, v, label in cats:
-        if v <= 0:
-            continue
-        axb.barh(0.5, v / tot * 0.9, left=left, color=c, height=0.5,
-                 edgecolor=NAVY, linewidth=1.2)
-        axb.text(left + (v / tot * 0.45), 0.5, str(v), ha="center",
-                 va="center", fontsize=16, fontweight="bold", color="white")
-        if v / tot > 0.18:
-            axb.text(left + (v / tot * 0.45), 0.84, label, ha="center",
-                     va="bottom", fontsize=9, color="#8ab4c8")
-        left += v / tot * 0.9
-    axb.set_xlim(0, 0.9)
-    axb.set_ylim(0, 1.3)
-    axb.axis("off")
-    axb.text(0.45, 0.08, f"{n_bull} bull · {n_bear} bear · {n_neut} flat",
-             ha="center", color="white", fontsize=9.5)
-    axb.set_title("今日方向分佈", color="white", fontsize=13,
-                  fontweight="bold", loc="left", pad=14)
-
-    axl.axis("off")
-    axl.text(0, 1.06, title or "財經影片今日重點", transform=axl.transAxes,
-             color="white", fontsize=14, fontweight="bold", va="top")
-    shown = items[:5]
-    step = 0.92 / max(len(shown), 1)
-    for idx, it in enumerate(shown):
-        if it.get("direction") == 1:
-            sym, col = "▲", GREEN
-        elif it.get("direction") == -1:
-            sym, col = "▼", REDX
-        else:
-            sym, col = "◆", TEAL
-        lbl = _shorten(it.get("verdict") or it.get("title") or "", 30)
-        axl.text(0, 0.90 - idx * step, f"{sym}  {lbl}",
-                 transform=axl.transAxes, color=col, fontsize=10.5, va="top")
-    if filedate:
-        axl.text(0, -0.10, f"◆ neutral/event · data {filedate}",
-                 transform=axl.transAxes, color="#8ab4c8", fontsize=8.5)
-
-    out = os.path.join(OUT_ROOT, "ytgem", f"chart_{stamp()}.png")
-    os.makedirs(os.path.dirname(out), exist_ok=True)
-    return _to_png(fig, out)
-
-
-def matplotlib_available() -> bool:
-    try:
-        import matplotlib  # noqa: F401
-        return True
-    except ImportError:
-        return False
-
-
-def _noop():
-    import matplotlib  # noqa: F401 — keep pyflakes quiet on renderer imports
-    matplotlib.use("Agg")
-
-
-# ── NotebookLM infographic path ─────────────────────────────────────────────
 
 NLM_CLI = os.environ.get("NLM_CLI", "")
 if not NLM_CLI or not os.path.exists(NLM_CLI):
@@ -568,7 +509,7 @@ if not NLM_CLI or not os.path.exists(NLM_CLI):
 
 
 def _nlm(args: list[str], timeout: int = 120) -> dict:
-    """Run nlm.py with JSON output; raise on error."""
+    """Run nlm.py with JSON output; raise on error (surfaces message)."""
     import subprocess
     r = subprocess.run([sys.executable, NLM_CLI] + args,
                        capture_output=True, text=True, timeout=timeout)
