@@ -560,7 +560,11 @@ def _noop():
 
 # ── NotebookLM infographic path ─────────────────────────────────────────────
 
-NLM_CLI = os.path.expanduser("~/.hermes/scripts/nlm.py")
+NLM_CLI = os.environ.get("NLM_CLI", "")
+if not NLM_CLI or not os.path.exists(NLM_CLI):
+    _c = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nlm.py")
+    NLM_CLI = _c if os.path.exists(_c) else os.path.expanduser(
+        "~/.hermes/scripts/nlm.py")
 
 
 def _nlm(args: list[str], timeout: int = 120) -> dict:
@@ -661,25 +665,31 @@ def nlm_download_image(url: str, out_path: str) -> str:
     if not url:
         raise RuntimeError("empty url")
     import asyncio
-    import browser_cookie3
+    try:
+        import browser_cookie3  # noqa: F401 — fallback only
+    except ImportError:
+        browser_cookie3 = None
 
     def norm_cookies():
-        """Browser cookies locally; storage_state.json (CI) otherwise."""
-        raw = None
+        """storage_state.json (CI + local NLM session) first; browser
+        cookies only as fallback."""
+        ss = os.environ.get(
+            "NOTEBOOKLM_STORAGE_STATE",
+            os.path.expanduser(
+                "~/.notebooklm/profiles/default/storage_state.json"))
+        raw = []
         try:
-            cj = browser_cookie3.firefox(domain_name=".google.com")
-            raw = [{"name": c.name, "value": c.value, "domain": c.domain,
-                    "path": c.path, "expires": c.expires,
-                    "secure": bool(c.secure)}
-                   for c in cj if c.domain.endswith("google.com")]
+            with open(ss) as f:
+                raw = json.load(f).get("cookies", [])
         except Exception:
-            raw = None
+            raw = []
         if not raw:
-            ss = os.path.expanduser(
-                "~/.notebooklm/profiles/default/storage_state.json")
             try:
-                with open(ss) as f:
-                    raw = json.load(f).get("cookies", [])
+                cj = browser_cookie3.firefox(domain_name=".google.com")
+                raw = [{"name": c.name, "value": c.value, "domain": c.domain,
+                        "path": c.path, "expires": c.expires,
+                        "secure": bool(c.secure)}
+                       for c in cj if c.domain.endswith("google.com")]
             except Exception:
                 raw = []
         cookies = []
