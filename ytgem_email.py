@@ -121,15 +121,21 @@ def make_infographics(results: list[dict]) -> list[str]:
             nb_title = (f"Finance YouTube Daily Digest — "
                         f"{_dt.now().strftime('%Y-%m-%d')}")
             nb = infographic.nlm_ensure_notebook(nb_title)
-            srcs = [{"title": f"{it.get('channel','')}: "
-                               f"{_shorten(it.get('title',''), 50)}",
-                     "text": (f"Channel: {it.get('channel','')}\n"
-                              f"Video title: {it.get('title','')}\n"
-                              f"YouTube URL: {it.get('url','')}\n"
-                              f"Today's takeaway: {it.get('verdict','')}\n"
-                              f"Direction: "
-                              f"{ {1:'bullish',-1:'bearish'}.get(it.get('direction'), 'neutral/event') }")}
-                    for it in items[:6]]
+            srcs = []
+            for it in items[:6]:
+                # find matching full analysis for content depth
+                analysis = ""
+                for r in results:
+                    if r.get("ok") and r.get("title") == it.get("title"):
+                        analysis = (r.get("analysis") or "")[:900]
+                        break
+                srcs.append({
+                    "title": f"{it.get('channel','')}: "
+                             f"{_shorten(it.get('title',''), 50)}",
+                    "text": (f"Channel: {it.get('channel','')}\n"
+                             f"Video title: {it.get('title','')}\n"
+                             f"YouTube URL: {it.get('url','')}\n"
+                             f"Video analysis (today):\n{analysis}")})
             n = infographic.nlm_add_text_sources(nb, srcs)
             print(f"[infographic] notebooklm: {n} sources attached", file=sys.stderr)
             inst = infographic.videos_notebook_context(
@@ -163,6 +169,11 @@ def make_infographic(results: list[dict]) -> str | None:
 def send_html(subject: str, html: str,
               image_paths: list[str] | str | None = None,
               cids: list[str] | None = None) -> bool:
+    try:
+        with open("/tmp/yt_digest_email.html", "w") as f:
+            f.write(html)
+    except Exception:
+        pass
     user, pw, recipient = load_smtp()
     if not user or not pw or not recipient:
         print("ERROR: SMTP not configured", file=sys.stderr)

@@ -63,3 +63,14 @@ jobs:
           YT_GEM_SMTP_PASS: ${{ secrets.YT_GEM_SMTP_PASS }}
           YT_GEM_RECIPIENT: ${{ secrets.YT_GEM_RECIPIENT }}
         run: python yt_gem_daily.py
+
+      - name: Upload digest artifacts (QA)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: yt-digest-output
+          path: |
+            ~/.hermes/digest_images/
+            /tmp/yt_digest_email.html
+          if-no-files-found: ignore
+          retention-days: 3
