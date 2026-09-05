@@ -62,6 +62,7 @@ jobs:
           YT_GEM_SMTP_USER: ${{ secrets.YT_GEM_SMTP_USER }}
           YT_GEM_SMTP_PASS: ${{ secrets.YT_GEM_SMTP_PASS }}
           YT_GEM_RECIPIENT: ${{ secrets.YT_GEM_RECIPIENT }}
+          NOTEBOOKLM_TRANSPORT: curl_cffi
         run: python yt_gem_daily.py
 
       - name: Upload digest artifacts (QA)

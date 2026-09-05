@@ -64,7 +64,8 @@ def _run(args, timeout=90):
     try:
         r = subprocess.run([NLM, "--quiet"] + args,
             capture_output=True, text=True, timeout=timeout,
-            env={**os.environ, "PYTHONUNBUFFERED": "1"})
+            env={**os.environ, "PYTHONUNBUFFERED": "1",
+                 "NOTEBOOKLM_TRANSPORT": "curl_cffi"})
         return r.stdout.strip(), r.stderr.strip(), r.returncode
     except subprocess.TimeoutExpired:
         return "", "timeout after {}s".format(timeout), 124

@@ -1,2 +1,3 @@
 requests>=2.31.0,<3
 notebooklm-py>=0.8.1
+curl_cffi>=0.7.0
