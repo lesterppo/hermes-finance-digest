@@ -621,6 +621,11 @@ ARTIFACT_TYPES = [
 
 def cmd_artifact_list(args):
     nb = _default_nb()
+    # honor -n/--notebook if present
+    for i, a in enumerate(args):
+        if a in ("-n", "--notebook") and i + 1 < len(args):
+            nb = args[i + 1]
+            break
     out, err, rc = _run(["artifact", "list", "--json"] + _nb_args(nb), timeout=30)
     if rc != 0:
         return _err(err or out)
@@ -791,15 +796,44 @@ def cmd_artifact_suggestions(args):
 
 def cmd_artifact_get(args):
     if not args:
-        return _err("usage: nlm.py artifact get <id>")
-    out, err, rc = _run(["artifact", "get", "--json", args[0]], timeout=30)
+        return _err("usage: nlm.py artifact get <id> [-n notebook]")
+    nb = None
+    rest = []
+    skip = False
+    for i, a in enumerate(args):
+        if skip:
+            skip = False
+            continue
+        if a in ("-n", "--notebook") and i + 1 < len(args):
+            nb = args[i + 1]
+            skip = True
+            continue
+        rest.append(a)
+    nb_args = _nb_args(nb) if nb else []
+    out, err, rc = _run(["artifact", "get", "--json", rest[0]] + nb_args,
+                        timeout=30)
     if rc != 0:
         return _err(err or out)
     data = _json_or_text(out)
     if isinstance(data, dict):
         art = _unwrap(data, "artifact")
+        url = art.get("url", "") or art.get("download_url", "")
+        if not url:
+            # poll returns the CDN url for completed artifacts
+            try:
+                pout, perr, prc = _run(["artifact", "poll", rest[0]] + nb_args
+                                       + ["--json"], timeout=30)
+                if prc == 0:
+                    pdata = _json_or_text(pout)
+                    if isinstance(pdata, dict):
+                        inner = _unwrap(pdata, "result")
+                        url = (inner.get("url", "") if isinstance(inner, dict)
+                               else "") or pdata.get("url", "") or ""
+            except Exception:
+                pass
         return _ok(id=art.get("id", ""), title=art.get("title", ""),
-                   type=art.get("type", ""), status=art.get("status", ""))
+                   type=art.get("type", ""), status=art.get("status", ""),
+                   url=url)
     return _ok(raw=out)
 
 def cmd_artifact_delete(args):

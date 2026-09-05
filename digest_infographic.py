@@ -610,6 +610,23 @@ def nlm_generate_infographic(nb: str, instructions: str,
             return d.get("url", "")
         except RuntimeError as e:
             if "RateLimitError" in str(e) or "rate" in str(e).lower():
+                # cap hit — reuse the notebook's latest completed infographic
+                try:
+                    d2 = _nlm(["art", "list", "-n", nb])
+                    cands = [a for a in d2.get("artifacts", [])
+                             if a.get("type") == "Infographic"
+                             and a.get("status") == "completed"]
+                    if cands:
+                        latest = max(cands,
+                                     key=lambda a: a.get("created_at", ""))
+                        g = _nlm(["art", "get", latest["id"], "-n", nb])
+                        u = g.get("url", "")
+                        if u:
+                            print("[nlm] cap reached — reusing today's "
+                                  "completed infographic", file=sys.stderr)
+                            return u
+                except Exception:
+                    pass
                 print("[nlm] NotebookLM daily artifact cap reached — "
                       "infographic skipped today", file=sys.stderr)
                 return ""
