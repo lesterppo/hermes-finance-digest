@@ -368,6 +368,9 @@ def analyze_video(video: dict, persona: str, auth: dict,
 # ── Email ──────────────────────────────────────────────────────────────────
 
 def _send_email(subject: str, body: str) -> None:
+    if os.environ.get("DIGEST_DRY_RUN", "").lower() in ("1", "true", "yes"):
+        log(f"DRY RUN — email suppressed (would send: {subject})")
+        return
     if not SMTP_USER or not SMTP_PASS or not RECIPIENT:
         log("ERROR: SMTP not configured — set YT_GEM_SMTP_USER, YT_GEM_SMTP_PASS, YT_GEM_RECIPIENT")
         return

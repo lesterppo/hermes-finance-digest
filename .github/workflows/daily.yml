@@ -4,6 +4,17 @@ on:
   schedule:
     - cron: "0 2 * * *"  # 10:00 HKT = 02:00 UTC
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "1 = exercise the pipeline but do NOT send email"
+        required: false
+        default: ""
+        type: string
+      hours_back:
+        description: "Override look-back window (hours)"
+        required: false
+        default: ""
+        type: string
 
 jobs:
   digest:
@@ -55,7 +66,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /home/runner/.hermes/yt_gem_seen.json
-          key: yt-gem-seen-v1
+          # Rolling key: a fixed key always HITs, and a hit skips the save,
+          # so the dedup state stays frozen and every run re-reports the
+          # same videos. Unique key + prefix restore keeps it flowing.
+          key: yt-gem-seen-${{ github.run_id }}
+          restore-keys: yt-gem-seen-
 
       - name: Run digest
         env:
@@ -63,6 +78,8 @@ jobs:
           YT_GEM_SMTP_PASS: ${{ secrets.YT_GEM_SMTP_PASS }}
           YT_GEM_RECIPIENT: ${{ secrets.YT_GEM_RECIPIENT }}
           NOTEBOOKLM_TRANSPORT: curl_cffi
+          DIGEST_DRY_RUN: ${{ github.event.inputs.dry_run }}
+          YT_GEM_HOURS_BACK: ${{ github.event.inputs.hours_back }}
         run: python yt_gem_daily.py
 
       - name: Upload digest artifacts (QA)
