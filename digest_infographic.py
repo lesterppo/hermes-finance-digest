@@ -218,10 +218,12 @@ def verdict_direction(text: str) -> int:
     """Classify a takeaway text as bullish (+1) / bearish (-1) / neutral (0)."""
     up = ("利好", "上升", "上漲", "漲", "升", "反彈", "走強", "突破", "看多",
           "樂觀", "買入", "加倉", "強勢", "回暖", "上揚", "bullish", "rally",
-          "surge", "gain", "beat", "看漲")
+          "surge", "gain", "beat", "看漲", "偏多", "多頭", "做多", "增持",
+          "加碼", "長倉", "值得關注")
     down = ("利空", "下跌", "下挫", "跌", "走弱", "承壓", "回落", "看空",
             "悲觀", "賣出", "減倉", "逃離", "風險", "受壓", "bearish", "crash",
-            "drop", "sink", "fear", "大跌", "壓抑", "壓力", "高企")
+            "drop", "sink", "fear", "大跌", "壓抑", "壓力", "高企", "偏空",
+            "空頭", "做空", "減持", "減碼", "短倉", "避險", "可略過")
     ups = sum(1 for k in up if k in text)
     downs = sum(1 for k in down if k in text)
     if ups > downs:
@@ -252,32 +254,28 @@ def render_videos_chart(items: list[dict], title: str = "",
     n_neut = len(items) - n_bull - n_bear
 
     fig, (axb, axl) = plt.subplots(
-        1, 2, figsize=(9.4, 3.6), dpi=200,
-        gridspec_kw={"width_ratios": [2.3, 3.2]}, facecolor=NAVY)
+        1, 2, figsize=(11.0, 3.6), dpi=200,
+        gridspec_kw={"width_ratios": [2.3, 3.9]}, facecolor=NAVY)
     for ax in (axb, axl):
         ax.set_facecolor(NAVY)
-    cats = [(GREEN, n_bull, "bullish"),
-            (REDX, n_bear, "bearish"),
-            (GRID, n_neut, "neutral")]
-    tot = sum(v for _, v, _ in cats) or 1
-    left = 0
-    for c, v, label in cats:
-        if v <= 0:
-            continue
-        axb.barh(0.5, v / tot * 0.9, left=left, color=c, height=0.5,
-                 edgecolor=NAVY, linewidth=1.2)
-        axb.text(left + (v / tot * 0.45), 0.5, str(v), ha="center",
-                 va="center", fontsize=16, fontweight="bold", color="white")
-        if v / tot > 0.18:
-            axb.text(left + (v / tot * 0.45), 0.84, label, ha="center",
-                     va="bottom", fontsize=9, color="#8ab4c8")
-        left += v / tot * 0.9
-    axb.set_xlim(0, 0.9)
+    cats = [(GREEN, n_bull, "bullish", "看多"),
+            (REDX, n_bear, "bearish", "看空"),
+            (GRID, n_neut, "neutral", "中性/事件")]
+    tot = sum(v for _, v, _, _ in cats) or 1
+    axb.set_xlim(-0.62, 1.05)
     axb.set_ylim(0, 1.3)
+    ys = [0.72, 0.48, 0.24]
+    for (c, v, _en, cn), y in zip(cats, ys):
+        axb.text(-0.04, y, cn, ha="right", va="center", color="#c9d6e2",
+                 fontsize=10.5)
+        axb.barh(y, max(v, 0) / tot * 0.9, color=c, height=0.16,
+                 edgecolor=NAVY, linewidth=1.0)
+        axb.text(max(v, 0) / tot * 0.9 + 0.03, y, str(v), ha="left",
+                 va="center", fontsize=11.5, fontweight="bold", color="white")
     axb.axis("off")
-    axb.text(0.45, 0.08, f"{n_bull} bull · {n_bear} bear · {n_neut} flat",
-             ha="center", color="white", fontsize=9.5)
-    axb.set_title("今日方向分佈", color="white", fontsize=13,
+    axb.text(0.21, 0.05, f"{n_bull} bullish · {n_bear} bearish · {n_neut} flat",
+             ha="center", color="#8ab4c8", fontsize=8.5)
+    axb.set_title("今日立場分佈", color="white", fontsize=13,
                   fontweight="bold", loc="left", pad=14)
 
     axl.axis("off")
@@ -292,9 +290,15 @@ def render_videos_chart(items: list[dict], title: str = "",
             sym, col = "▼", REDX
         else:
             sym, col = "◆", TEAL
-        lbl = _shorten(it.get("verdict") or it.get("title") or "", 30)
+        who = it.get("channel") or ""
+        what = it.get("title") or it.get("verdict") or ""
+        lbl = _shorten(f"{who} — {what}" if who else what, 56)
         axl.text(0, 0.90 - idx * step, f"{sym}  {lbl}",
                  transform=axl.transAxes, color=col, fontsize=10.5, va="top")
+        if it.get("verdict"):
+            axl.text(0.012, 0.90 - idx * step - step * 0.42,
+                     _shorten(it["verdict"], 40), transform=axl.transAxes,
+                     color="#8ab4c8", fontsize=9, va="top")
     if filedate:
         axl.text(0, -0.10, f"◆ neutral/event · data {filedate}",
                  transform=axl.transAxes, color="#8ab4c8", fontsize=8.5)
@@ -312,24 +316,72 @@ def matplotlib_available() -> bool:
         return False
 
 
+_STANCE_RE = re.compile(r"\|\s*(?:立場|投資方向|Stance)\s*\|\s*([^|\n]{1,60}?)\s*\|")
+_INSTR_RE = re.compile(r"\|\s*(?:主要工具|工具|Instruments?)\s*\|\s*([^|\n]{1,80}?)\s*\|")
+_CONCL_RE = re.compile(r"結論\s*\*{0,2}\s*[:：]\s*([^\n—\-–|]{1,24})")
+_SECTION_NOISE = (
+    "交易摘要", "執行摘要", "核心論點", "數據與證據", "市場背景", "風險矩陣",
+    "可行動", "綜合評分", "desk take", "thesis", "data &", "market context",
+    "risk matrix", "actionable", "overall assessment", "executive summary",
+)
+
+
 def extract_verdicts_from_analyses(analyses: list[dict]) -> list[dict]:
-    """Pull a short takeaway per video analysis: first bold/header line or
-    first sentence clause. analyses: [{title, analysis, ok}]"""
+    """Pull a short, meaningful takeaway per note.
+
+    Desk-note structure first: the 立場 (stance) cell of the Desk Take table,
+    plus the 結論 (verdict word) when present — e.g. "中性偏空 · 可略過".
+    Falls back to the first non-boilerplate bold/heading line, then to the
+    video title. analyses: [{title, analysis, ok}]
+    """
     out = []
     for a in analyses:
         if not a.get("ok"):
             continue
         text = a.get("analysis") or ""
+        stance = ""
+        m = _STANCE_RE.search(text)
+        if m:
+            stance = m.group(1).strip()
+        instr = ""
+        m = _INSTR_RE.search(text)
+        if m:
+            instr = re.sub(r"\s*[（(][^）)]*[）)]", "", m.group(1))
+            # LSEG-style markers like [^SPY] leak into the cell — strip them
+            instr = re.sub(r"[\^\[\]\\]", "", instr).strip(" ,、;")
+        concl = ""
+        m = _CONCL_RE.search(text)
+        if m:
+            concl = m.group(1).strip().strip("*：: ")
+
         verdict = ""
-        for pat in (r"^#+\s*(.+)$", r"\*\*(.{4,60}?)\*\*"):
-            m = re.search(pat, text, re.M)
-            if m:
-                verdict = m.group(1)
-                break
+        if stance and instr:
+            verdict = f"{stance}｜{instr}"
+        elif stance and concl:
+            verdict = f"{stance} · {concl}"
+        else:
+            verdict = stance or concl
+
+        if not verdict:
+            for pat in (r"^#+\s*(.+)$", r"\*\*(.{4,60}?)\*\*"):
+                for m in re.finditer(pat, text, re.M):
+                    cand = m.group(1).strip()
+                    low = cand.lower()
+                    if any(n in low for n in _SECTION_NOISE):
+                        continue
+                    verdict = cand
+                    break
+                if verdict:
+                    break
         if not verdict:
             m = re.search(r"([^。！？\n]{6,40})[。！？]?", text)
             verdict = m.group(1) if m else a.get("title", "")
-        out.append({"title": a.get("title", ""), "verdict": verdict})
+
+        item = {"title": a.get("title", ""), "verdict": verdict,
+                "channel": a.get("channel", "")}
+        if stance:
+            item["stance"] = stance
+        out.append(item)
     return out
 
 
@@ -507,13 +559,22 @@ def videos_notebook_context(items: list[dict], date_label: str = "") -> str:
         "Chinese finance YouTube videos. This is a knowledge summary, NOT a "
         "scorecard: do not show sentiment scores, ratings, bull/bear meters, "
         "or stacked opinion bars.\n"
-        "Structure it as 4-6 narrative cards (one per video), each with: the "
-        "channel name, the video's core narrative in one short Traditional "
-        "Chinese headline, 2-3 bullet facts it presents (tickers, numbers, "
-        "policy names, sectors — only those present in the source text), and "
-        "one '投資視角:' line with the video's stated implication or risk. "
+        "LANGUAGE (strict): every visible word must be Traditional Chinese. "
+        "Never render a Chinese title, concept or takeaway in English — no "
+        "'BlackRock View', no 'One-Hammer Tone'. The only Latin text allowed is "
+        "tickers, index names and company/institution names (NVDA, ORCL, "
+        "Federal Reserve). Where a Chinese rendering would be awkward, use the "
+        "ticker alone.\n"
+        "Structure it as 4 narrative cards, each with: the channel name, the "
+        "video's core narrative in one short Traditional Chinese headline, 2-3 "
+        "bullet facts it presents (tickers, numbers, policy names, sectors — "
+        "only those present in the source text), and one '投資視角:' line with "
+        "the video's stated implication or risk. "
         "Use small up/down arrows only where the video itself states a "
         "direction.\n"
+        "CHARTS (strict): never repeat the same axis label twice; label every "
+        "bar or point with its value AND its period (e.g. '現在 12GW' / "
+        "'2032 38GW'); use 環比 / 同比 for MoM / YoY.\n"
         "Base every statement ONLY on the video summaries below — no "
         "invented tickers, prices, or claims. Flat vector, dark navy "
         "background, teal/amber accents, crisp Traditional Chinese text, "

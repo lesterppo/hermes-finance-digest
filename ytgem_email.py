@@ -191,8 +191,9 @@ def make_infographics(results: list[dict]) -> list[str]:
         if not items:
             return out
         for it in items:
+            base = (it.get("stance") or "") + " " + (it.get("verdict") or "")
             it.setdefault("direction", infographic.verdict_direction(
-                (it.get("verdict") or "") + " " + (it.get("title") or "")))
+                base + " " + (it.get("title") or "")))
         # 1. matplotlib pulse panel
         img = infographic.render_videos_chart(items, title="財經影片今日重點")
         if img:

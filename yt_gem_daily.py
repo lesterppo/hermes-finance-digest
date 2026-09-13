@@ -728,6 +728,14 @@ def main() -> int:
 
     # 7. Email report (with cross-video synthesis)
     ok_count = sum(1 for r in results if r["ok"])
+    dump = os.environ.get("YT_GEM_DUMP_ANALYSES")
+    if dump:
+        try:
+            Path(dump).write_text(json.dumps(results, ensure_ascii=False),
+                                  encoding="utf-8")
+            log(f"Dumped analyses -> {dump}")
+        except OSError as e:
+            log(f"Dump failed: {e}")
     summary = synthesize_digest(results, auth, GEMINI_TIMEOUT)
     _send_report_email(channels, results, ok_count, start_time, summary)
     _touch_heartbeat()
