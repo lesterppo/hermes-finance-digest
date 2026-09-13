@@ -121,6 +121,9 @@ def _filter_duplicates(videos, seen):
     window_cutoff = (now - timedelta(hours=SEEN_WINDOW_HOURS)).isoformat()
     new_videos = []
     skipped = 0
+    if os.environ.get("YT_GEM_IGNORE_SEEN", "").lower() in ("1", "true", "yes"):
+        log("IGNORE_SEEN set — dedup disabled for this run (testing)")
+        return list(videos), seen
     for v in videos:
         vid = v["video_id"]
         if vid in seen and seen[vid] >= window_cutoff:
