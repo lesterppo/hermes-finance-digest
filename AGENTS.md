@@ -184,6 +184,20 @@ All configurable via `YT_GEM_*` env vars. Set in GitHub Secrets or `.env` file.
 | Email not received | Gmail app password revoked | Regenerate at myaccount.google.com/apppasswords |
 | All analyses FAIL | Gemini rate-limited | Reduce MAX_CONCURRENT, check cookie validity |
 
+## Verifying pipeline changes safely
+
+- `DIGEST_DRY_RUN=1` (workflow input `dry_run`) runs the whole pipeline —
+  scrape, Gemini analysis, infographics — and suppresses **both** senders
+  (`yt_gem_daily._send_email` and `ytgem_email.send_html`). Guard new senders
+  with the same check.
+- The seen-videos cache key must stay ROLLING
+  (`yt-gem-seen-${{ github.run_id }}` + `restore-keys: yt-gem-seen-`). A fixed
+  key always HITs, a hit skips the save, and the dedup state freezes so every
+  run re-reports the same videos.
+- Numeric env vars go through `_env_int()`: an unfilled `workflow_dispatch`
+  input arrives as an empty string, and a bare `int(os.environ.get(...))`
+  crashes on it.
+
 ## GitHub Action Schedule
 
 Default: daily at 02:00 UTC (10:00 HKT). Edit `.github/workflows/daily.yml`:
