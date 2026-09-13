@@ -37,6 +37,13 @@ import requests
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
+def _env_int(name: str, default: str) -> int:
+    """int() from env, tolerating unset OR empty values (a workflow_dispatch
+    input that isn't filled in arrives as an empty string, not unset)."""
+    raw = (os.environ.get(name) or "").strip()
+    return int(raw) if raw else int(default)
+
+
 def _env_path(key: str, default_rel: str) -> str:
     if os.environ.get(key):
         return os.path.expanduser(os.environ[key])
@@ -61,23 +68,23 @@ AUTH_JSON = os.path.expanduser(
 SMTP_USER = os.environ.get("YT_GEM_SMTP_USER", "")
 SMTP_PASS = os.environ.get("YT_GEM_SMTP_PASS", "")
 SMTP_SERVER = os.environ.get("YT_GEM_SMTP_SERVER", "smtp.gmail.com")
-SMTP_PORT = int(os.environ.get("YT_GEM_SMTP_PORT", "465"))
+SMTP_PORT = _env_int("YT_GEM_SMTP_PORT", "465")
 RECIPIENT = os.environ.get("YT_GEM_RECIPIENT", "")
 
 MODEL = os.environ.get("YT_GEM_MODEL", "flash")
 THINKING = os.environ.get("YT_GEM_THINKING", "extended")
 
-HOURS_BACK = int(os.environ.get("YT_GEM_HOURS_BACK", "24"))
-GEMINI_TIMEOUT = int(os.environ.get("YT_GEM_TIMEOUT", "300"))
-MAX_CONCURRENT = int(os.environ.get("YT_GEM_MAX_CONCURRENT", "3"))
-GEMINI_RETRIES = int(os.environ.get("YT_GEM_RETRIES", "2"))
-TOTAL_TIMEOUT = int(os.environ.get("YT_GEM_TOTAL_TIMEOUT", "900"))
-COOKIE_WARN_DAYS = int(os.environ.get("YT_GEM_COOKIE_WARN_DAYS", "25"))
+HOURS_BACK = _env_int("YT_GEM_HOURS_BACK", "24")
+GEMINI_TIMEOUT = _env_int("YT_GEM_TIMEOUT", "300")
+MAX_CONCURRENT = _env_int("YT_GEM_MAX_CONCURRENT", "3")
+GEMINI_RETRIES = _env_int("YT_GEM_RETRIES", "2")
+TOTAL_TIMEOUT = _env_int("YT_GEM_TOTAL_TIMEOUT", "900")
+COOKIE_WARN_DAYS = _env_int("YT_GEM_COOKIE_WARN_DAYS", "25")
 
 SEEN_FILE = os.path.expanduser(
     os.environ.get("YT_GEM_SEEN_FILE", "~/.hermes/yt_gem_seen.json"))
-SEEN_WINDOW_HOURS = int(os.environ.get("YT_GEM_SEEN_WINDOW_HOURS", "48"))
-SEEN_PRUNE_DAYS = int(os.environ.get("YT_GEM_SEEN_PRUNE_DAYS", "7"))
+SEEN_WINDOW_HOURS = _env_int("YT_GEM_SEEN_WINDOW_HOURS", "48")
+SEEN_PRUNE_DAYS = _env_int("YT_GEM_SEEN_PRUNE_DAYS", "7")
 
 HEARTBEAT_FILE = os.path.expanduser(
     os.environ.get("YT_GEM_HEARTBEAT_FILE", "~/.hermes/yt_gem_heartbeat"))
