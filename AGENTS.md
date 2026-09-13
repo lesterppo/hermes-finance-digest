@@ -8,9 +8,12 @@ whether you are Claude Code, Codex, Hermes Agent, Cursor, or any other AI coding
 A cron-driven pipeline that:
 1. Scrapes YouTube channels for recent videos via page scraping (works from any IP)
 2. Sends each video URL directly to **Gemini** (Flash Extended Thinking) — Gemini resolves transcripts natively
-3. Produces institutional-quality 7-dimension analysis per video
-4. Compiles all analyses into an email report
-5. Analysis persona loaded from `GEM_SYSTEM_PROMPT.md`; built-in institutional analyst fallback
+3. Produces a buy-side desk note per video (Desk Take → Thesis → Data Audit → Market Pricing → Risk → Actionable → Scored)
+4. Runs one synthesis pass to build the cross-video briefing at the top of the email
+5. Compiles everything into an HTML email report (plus a matplotlib chart and a NotebookLM infographic)
+6. Analysis persona loaded from `GEM_SYSTEM_PROMPT.md`; the same desk-note standard is embedded as a fallback prompt
+
+This repo is the canonical home; the earlier private fork (`youtube-gem-digest`) is archived.
 
 ## Architecture
 
@@ -18,7 +21,9 @@ A cron-driven pipeline that:
 GitHub Actions (daily 02:00 UTC / 10:00 HKT)
   ├── Page scraping (lockupViewModel) — parallel per channel
   ├── Per-video Gemini analysis — URL-direct, max 3 concurrent
-  │   └── 7-dimension framework: Summary → Thesis → Data → Context → Risk → Insights → Assessment
+  │   └── Desk-note standard: Desk Take → Thesis → Data → Pricing → Risk → Actionable → Scored
+  ├── Cross-video synthesis (one Gemini call over the ranked notes)
+  ├── Infographics: matplotlib chart + NotebookLM dashboard
   └── SMTP email delivery
 ```
 
@@ -76,7 +81,7 @@ URLs must use the `@handle` format. Percent-encoded handles are auto-decoded.
 
 ### Step 5: Customize Analysis Persona (Optional)
 Edit `GEM_SYSTEM_PROMPT.md` to change the analysis style, language, or domain.
-Delete the file to use the built-in 7-dimension institutional analyst prompt.
+Delete the file to use the built-in desk-note analyst prompt.
 The built-in prompt works in any domain — finance is just the default.
 
 ### Step 6: Set GitHub Secrets
@@ -147,6 +152,9 @@ All configurable via `YT_GEM_*` env vars. Set in GitHub Secrets or `.env` file.
 | `YT_GEM_SEEN_FILE` | `~/.hermes/yt_gem_seen.json` | Dedup database |
 | `YT_GEM_SEEN_WINDOW_HOURS` | `48` | Skip videos in this window |
 | `YT_GEM_SEEN_PRUNE_DAYS` | `7` | Auto-clean old entries |
+| `YT_GEM_SYNTHESIS` | `1` | `0` disables the cross-video briefing call |
+| `YT_GEM_SYNTHESIS_CHARS` | `2500` | Max chars per note fed to the briefing |
+| `DIGEST_DRY_RUN` | *(unset)* | `1` runs the pipeline but sends no email |
 | `YT_GEM_HEARTBEAT_FILE` | `~/.hermes/yt_gem_heartbeat` | Watchdog heartbeat |
 | `YT_GEM_COOKIE_WARN_DAYS` | `25` | Cookie expiry warning threshold |
 
@@ -169,7 +177,7 @@ All configurable via `YT_GEM_*` env vars. Set in GitHub Secrets or `.env` file.
 - **Different domain**: change the persona prompt + channels (tech reviews, news analysis, academic papers)
 - **Different schedule**: edit `cron:` in `.github/workflows/daily.yml` (standard cron syntax)
 - **Different model**: set `YT_GEM_MODEL=pro` in workflow env for deeper but slower analysis
-- **No persona file**: delete `GEM_SYSTEM_PROMPT.md` — built-in 7-dimension prompt activates automatically
+- **No persona file**: delete `GEM_SYSTEM_PROMPT.md` — the built-in desk-note prompt activates automatically
 
 ## Troubleshooting
 
@@ -186,10 +194,18 @@ All configurable via `YT_GEM_*` env vars. Set in GitHub Secrets or `.env` file.
 
 ## Verifying pipeline changes safely
 
+- The desk-note standard lives in `GEM_SYSTEM_PROMPT.md`; keep the embedded
+  `_BUILTIN_PROMPT` in `yt_gem_daily.py` in sync — it is the no-persona fallback.
+- `_rank()` orders notes by the score each note states (`綜合評級：x.x / 10`)
+  before the email is built, and runs BEFORE the synthesis pass so the briefing's
+  "影片 N" references still line up. Never sort after synthesis.
+- Bare `[mm:ss]` citations are converted to clickable links by
+  `linkify_timestamps()`; the markdown renderer in `ytgem_email.md_to_html()`
+  then renders headings, bullets and tables (escaping HTML first).
 - `DIGEST_DRY_RUN=1` (workflow input `dry_run`) runs the whole pipeline —
-  scrape, Gemini analysis, infographics — and suppresses **both** senders
-  (`yt_gem_daily._send_email` and `ytgem_email.send_html`). Guard new senders
-  with the same check.
+  scrape, Gemini analysis, synthesis, infographics — and suppresses **both**
+  senders (`yt_gem_daily._send_email` and `ytgem_email.send_html`). Guard new
+  senders with the same check.
 - The seen-videos cache key must stay ROLLING
   (`yt-gem-seen-${{ github.run_id }}` + `restore-keys: yt-gem-seen-`). A fixed
   key always HITs, a hit skips the save, and the dedup state freezes so every

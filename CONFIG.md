@@ -32,6 +32,14 @@ YT_GEM_RECIPIENT=recipient@email.com
 # YT_GEM_SEEN_WINDOW_HOURS=48   # skip videos seen in this window
 # YT_GEM_SEEN_PRUNE_DAYS=7      # auto-clean entries older than this
 
+# ── CROSS-VIDEO BRIEFING ────────────────────────────────────────────────────
+# YT_GEM_SYNTHESIS=1             # 1 = one extra Gemini pass builds the desk briefing
+#                                #     across all of the day's notes (0 disables)
+# YT_GEM_SYNTHESIS_CHARS=2500    # max chars of each note fed into the briefing
+
 # ── MONITORING ──────────────────────────────────────────────────────────────
 # YT_GEM_HEARTBEAT_FILE=~/.hermes/yt_gem_heartbeat
 # YT_GEM_COOKIE_WARN_DAYS=25    # warn when auth cookies approach expiry
+
+# ── TESTING ─────────────────────────────────────────────────────────────────
+# DIGEST_DRY_RUN=1              # run the whole pipeline but send no email

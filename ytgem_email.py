@@ -39,6 +39,70 @@ def load_smtp() -> tuple[str, str, str]:
     return user, pw, recipient
 
 
+_BULLET_RE = re.compile(r"^\s*[-*\u2022]\s+")
+_NUM_RE = re.compile(r"^\s*\d+[.)]\s+")
+_TABLE_SEP_RE = re.compile(r"^\|[\s:\-|]+\|$")
+
+
+def _md_inline(s: str) -> str:
+    s = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s)
+    s = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<i>\1</i>", s)
+    s = re.sub(r"`([^`]+)`", r"<code>\1</code>", s)
+    s = re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+)\)",
+               r'<a href="\2">\1</a>', s)
+    return s
+
+
+def md_to_html(text: str) -> str:
+    """Small markdown renderer for analyst notes: headings, bullets, tables,
+    bold/italic/code/links. Email-safe (escapes HTML first)."""
+    import html as _html
+    lines = _html.escape(text or "").split("\n")
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i].rstrip()
+        # table block: header row + separator row
+        if (line.startswith("|") and i + 1 < len(lines)
+                and _TABLE_SEP_RE.match(lines[i + 1].strip())):
+            rows = []
+            while i < len(lines) and lines[i].strip().startswith("|"):
+                rows.append(lines[i].strip().strip("|").split("|"))
+                i += 1
+            head = "".join(f"<th>{_md_inline(c.strip())}</th>" for c in rows[0])
+            body = "".join(
+                "<tr>" + "".join(f"<td>{_md_inline(c.strip())}</td>" for c in r)
+                + "</tr>" for r in rows[2:])
+            out.append(f"<table><thead><tr>{head}</tr></thead>"
+                       f"<tbody>{body}</tbody></table>")
+            continue
+        if re.match(r"^#{1,6}\s", line):
+            lvl = min(len(line) - len(line.lstrip("#")), 4)
+            out.append(f"<h{lvl+2}>{_md_inline(line.lstrip('#').strip())}</h{lvl+2}>")
+        elif _BULLET_RE.match(line):
+            items = []
+            while i < len(lines) and _BULLET_RE.match(lines[i]):
+                items.append(f"<li>{_md_inline(_BULLET_RE.sub('', lines[i].strip()))}</li>")
+                i += 1
+            out.append(f"<ul>{''.join(items)}</ul>")
+            continue
+        elif _NUM_RE.match(line):
+            items = []
+            while i < len(lines) and _NUM_RE.match(lines[i]):
+                items.append(f"<li>{_md_inline(_NUM_RE.sub('', lines[i].strip()))}</li>")
+                i += 1
+            out.append(f"<ol>{''.join(items)}</ol>")
+            continue
+        elif line.strip() in ("---", "***"):
+            out.append("<hr/>")
+        elif not line.strip():
+            pass
+        else:
+            out.append(f"<p>{_md_inline(line)}</p>")
+        i += 1
+    return "\n".join(out)
+
+
 def build_html(date_str: str, results: list[dict], meta: dict) -> str:
     """results: [{channel,title,url,analysis,ok}] — full digest HTML."""
     ok = [r for r in results if r.get("ok")]
@@ -46,29 +110,46 @@ def build_html(date_str: str, results: list[dict], meta: dict) -> str:
     for r in results:
         state = "✓" if r.get("ok") else "✗"
         analysis = r.get("analysis") or ""
-        analysis = analysis if r.get("ok") else \
-            f"<i>{analysis}</i>"
-        # crude markdown->html for analysis text
-        analysis = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", analysis)
-        analysis = re.sub(r"^#+\s*(.+)$", r"<h4>\1</h4>", analysis, flags=re.M)
-        analysis = analysis.replace("\n", "<br/>")
+        analysis = md_to_html(analysis)
+        if not r.get("ok"):
+            analysis = f"<i>{analysis}</i>"
         cards.append(f"""
   <div class="card">
     <div class="head">{state} 【{r.get('channel','')}】
       <a href="{r.get('url','')}">{r.get('title','')}</a></div>
     <div class="body">{analysis}</div>
   </div>""")
+    summary = meta.get("digest_summary") or ""
+    summary_html = ""
+    if summary.strip():
+        summary_html = f"""
+  <div class="card summary">
+    <div class="head">🧭 今日綜合研判 — 跨影片機構視角</div>
+    <div class="body">{md_to_html(summary)}</div>
+  </div>
+  <hr/>"""
     css = """
   <style>
     body{font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;
-         color:#1f2328;max-width:780px;margin:0 auto;padding:16px;line-height:1.6;}
+         color:#1f2328;max-width:820px;margin:0 auto;padding:16px;line-height:1.6;}
     h1{font-size:20px;border-bottom:2px solid #d0d7de;padding-bottom:8px;}
     .meta{color:#57606a;font-size:13px;}
     .card{border:1px solid #d0d7de;border-radius:10px;padding:12px 14px;
           margin:12px 0;}
+    .card.summary{border:1px solid #1a7f37;background:#f2fbf4;}
+    .card.summary .head{color:#1a7f37;}
     .head{font-weight:600;margin-bottom:6px;}
     a{color:#0969da;text-decoration:none;}
     .body{font-size:14px;}
+    .body h2,.body h3,.body h4{font-size:15px;margin:14px 0 6px;}
+    .body ul,.body ol{margin:6px 0 6px 18px;padding:0;}
+    .body li{margin:3px 0;}
+    .body p{margin:6px 0;}
+    table{border-collapse:collapse;width:100%;margin:8px 0;font-size:13px;}
+    th,td{border:1px solid #d0d7de;padding:5px 7px;text-align:left;
+          vertical-align:top;}
+    th{background:#f6f8fa;}
+    code{background:#f6f8fa;padding:1px 4px;border-radius:4px;font-size:12px;}
     .infographic{width:100%;border-radius:10px;margin:10px 0 2px;}
     .cap{color:#57606a;font-size:12px;}
   </style>"""
@@ -90,6 +171,7 @@ def build_html(date_str: str, results: list[dict], meta: dict) -> str:
 <div class="meta">分析引擎：Gemini Flash + Extended Thinking（webapi）
  | 影片：{len(ok)}/{len(results)} 成功 | {meta.get('channel_count','')} channels</div>
 <hr/>
+{summary_html}
 {''.join(cards)}
 <hr/>
 {info_html}

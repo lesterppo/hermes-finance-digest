@@ -6,12 +6,16 @@
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-A zero-cost, fully automated pipeline that scrapes YouTube channels for new videos daily, sends each video URL directly to **Google Gemini** (Flash Extended Thinking) for institutional-quality analysis using a **7-dimension analytical framework**, and delivers the compiled report via email. No API keys needed — uses Gemini web cookies for authentication.
+A zero-cost, fully automated pipeline that scrapes YouTube channels for new videos daily, sends each video URL directly to **Google Gemini** (Flash Extended Thinking) for **buy-side desk-note analysis**, cross-synthesizes the day's notes into one decision briefing, and delivers the compiled report via email. No API keys needed — uses Gemini web cookies for authentication.
+
+> Canonical repo. The earlier private fork (`youtube-gem-digest`) is archived — this repo is the single home of the pipeline and its one daily workflow.
 
 ## Features
 
 - **URL-Direct Analysis** — Sends YouTube video URLs directly to Gemini. No transcript extraction needed — Gemini resolves video content and transcripts natively.
-- **7-Dimension Framework** — Each video gets a structured institutional analysis: Executive Summary → Thesis Deconstruction → Data & Evidence Audit → Market Context → Risk Matrix → Actionable Insights → Overall Assessment (star ratings).
+- **Desk-Note Standard** — Every video gets a pre-trade style note: Desk Take (stance / conviction / horizon / instruments / catalyst / invalidation / edge) → Thesis Deconstruction → Data & Evidence Audit → Market Context & Pricing → Risk Matrix → Actionable Insights with instrument mapping → Scored Assessment with reasons. Timestamp citations are auto-linked back to the video.
+- **Cross-Video Briefing** — One extra pass over the day's notes produces the top of the email: core messages, agreement vs contradiction between videos, an actionable list with real tickers (conditional watchlist when there is no high-conviction trade), upcoming catalysts and dates, market posture, and the day's shared blind spot.
+- **Decision-First Ordering** — Notes are ranked by their own composite score before the email is assembled, so the highest-value note is read first.
 - **Zero API Cost** — Uses Gemini web cookies (`__Secure-1PSID`), no API key or billing required.
 - **Fully Configurable** — All settings via environment variables. Customize channels, analysis persona, language, model, schedule — everything.
 - **GitHub Actions Ready** — Scheduled daily run included. Set 5 secrets and you're done.
@@ -50,8 +54,10 @@ YouTube pages → lockupViewModel scraping → per-video Gemini analysis (URL-di
 
 1. Scrapes `@handle/videos` pages for videos published in the last 24 hours (works from any IP, unlike RSS)
 2. Sends each video URL individually to Gemini Flash Extended Thinking
-3. Gemini accesses the video, reads the transcript, and produces a 7-dimension analysis
-4. All analyses compiled into a single email report
+3. Gemini accesses the video, reads the transcript, and writes a buy-side desk note
+4. Notes are ranked by their own composite score
+5. One synthesis pass turns the ranked notes into the cross-video briefing at the top of the email
+6. Email is assembled as HTML (with a data-viz chart and a NotebookLM dashboard) and sent over SMTP
 
 ## Customization
 
@@ -63,18 +69,23 @@ YouTube pages → lockupViewModel scraping → per-video Gemini analysis (URL-di
 | **Model** | `YT_GEM_MODEL=pro` for deeper analysis, `flash` for speed (default) |
 | **Schedule** | Edit `cron:` in `.github/workflows/daily.yml` |
 | **Recipient** | `YT_GEM_RECIPIENT` env var |
+| **Cross-video briefing** | `YT_GEM_SYNTHESIS=0` to turn it off; `YT_GEM_SYNTHESIS_CHARS` caps each note's contribution |
 
-## Analysis Framework
+## Analysis Standard
 
-Each video is analyzed across 7 dimensions:
+Each video is analyzed as a pre-trade desk note (`GEM_SYSTEM_PROMPT.md`; the same
+standard is embedded as a fallback prompt):
 
-1. **Executive Summary** — Core thesis, investment direction, time horizon, information value rating
-2. **Thesis Deconstruction** — Point-by-point logic chain analysis with strength ratings
-3. **Data & Evidence Audit** — Source reliability, timeliness check, missing data identification
-4. **Market Context** — Macro positioning, sector trends, policy impact, price-in assessment
-5. **Risk Matrix** — Tabular risk breakdown: macro/policy/market/fundamental/liquidity
-6. **Actionable Insights** — Tiered recommendations: agree/partially agree/disagree scenarios
-7. **Overall Assessment** — 6-dimensional star ratings + composite score /10
+0. **Desk Take** — stance, conviction 1–5, horizon, instruments with real tickers, catalyst + date, invalidation condition, and whether the video carries any information edge versus consensus
+1. **Executive Summary** — core thesis, direction, information value grade (A/B/C) with reason
+2. **Thesis Deconstruction** — per argument: logic chain, rigour (strongly / partly / thinly supported), strongest counter-argument, verifiability
+3. **Data & Evidence Audit** — table of claims, timestamps, audit verdict, missing or confounding variables
+4. **Market Context & Pricing** — explicitly separates what is priced in from what is not
+5. **Risk Matrix** — macro / policy / market / fundamental / liquidity, with monitoring indicators
+6. **Actionable Insights** — instrument-mapping table (idea, ticker, direction, trigger, invalidation) plus agree / partly agree / disagree playbooks
+7. **Scored Assessment** — six dimensions scored with one-line reasons, composite /10, verdict (值得關注 / 一般 / 可略過)
+
+Timestamps written as `[mm:ss]` are converted to clickable links back to the video's moment.
 
 ## Configuration Reference
 
@@ -89,6 +100,10 @@ All environment variables (see `CONFIG.md` for full list):
 | `YT_GEM_RECIPIENT` | Yes | — | Destination email |
 | `YT_GEM_MODEL` | No | `flash` | `flash`, `pro`, or `lite` |
 | `YT_GEM_HOURS_BACK` | No | `24` | Look-back window |
+| `YT_GEM_SYNTHESIS` | No | `1` | Cross-video briefing (`0` disables) |
+| `YT_GEM_SYNTHESIS_CHARS` | No | `2500` | Max chars per note fed to the briefing |
+| `YT_GEM_SEEN_FILE` | No | `~/.hermes/yt_gem_seen.json` | Dedup database |
+| `DIGEST_DRY_RUN` | No | — | `1` runs everything but sends no email |
 
 *For GitHub Actions: set as repository secrets.
 
@@ -96,8 +111,12 @@ All environment variables (see `CONFIG.md` for full list):
 
 | File | Purpose |
 |------|---------|
-| `yt_gem_daily.py` | Main script — scraping, Gemini analysis, email |
+| `yt_gem_daily.py` | Main script — scraping, Gemini desk notes, synthesis, email |
 | `gemini.py` | Bundled Gemini CLI (gemini-webapi, cookie auth) |
+| `ytgem_email.py` | HTML email builder + SMTP sender (markdown renderer, infographic CIDs) |
+| `digest_infographic.py` | matplotlib chart + NotebookLM infographic generation |
+| `nlm.py` | NotebookLM CLI wrapper used by the infographic step |
+| `nlm_cookie_sync.py` | Refreshes the NotebookLM session secret from a live browser |
 | `yt_gem_watchdog.py` | Silent-failure alert if no email for >48h |
 | `refresh_gh_secrets.py` | Auto-refresh cookies to GitHub Secrets |
 | `channels.txt` | YouTube channel URLs (user-editable) |

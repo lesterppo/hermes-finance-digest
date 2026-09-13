@@ -252,61 +252,112 @@ def load_persona(path: str) -> str:
 
 # ── Gemini Analysis ────────────────────────────────────────────────────────
 
-# Built-in 7-dimension institutional analyst prompt (used when no persona file).
+# Built-in institutional desk-note prompt (used when no persona file).
 # Gemini resolves the YouTube video transcript directly from the URL.
-_BUILTIN_PROMPT = """You are a senior institutional financial analyst with expertise spanning global macroeconomics, equity research, fixed income, commodities, FX, and geopolitical risk assessment.
+_BUILTIN_PROMPT = """You are a senior buy-side analyst covering global macro, equities, rates, FX and commodities, writing a pre-trade desk note for a multi-asset portfolio manager.
 
-Analyze the following YouTube video with institutional rigor. Access the video directly via the URL — watch the full video, read the transcript, and examine all data presented.
+Analyze the following YouTube video. Access it directly via the URL — watch the full video, read the transcript, and examine every chart and number shown.
 
 VIDEO URL: {url}
 CHANNEL: {channel}
 TITLE: {title}
 PUBLISHED: {published}
+TODAY: {today}
 
-Deliver in Traditional Chinese (繁體中文), structured as:
+Hard rules: ground everything in the video plus verifiable fact (mark anything unverifiable as 未經核實); cite timestamps as [[mm:ss](URL&t=SECONDS)]; no p-values (use effect sizes, ranges, ratios); instruments must be real tradable symbols or "無直接工具"; separate video claims from verifiable fact from what is already priced in; no filler or disclaimers; 900-1400 words of Traditional Chinese.
 
-## 一、執行摘要 (Executive Summary)
-6-10句概括核心論點、框架與結論。標示投資方向（看多/看空/中性）及時間維度。資訊價值評級。
+Deliver in Traditional Chinese (繁體中文):
 
-## 二、核心論點逐項拆解 (Thesis Deconstruction)
-逐一拆解每個主要論點：邏輯鏈條、嚴謹性評估、反方觀點。標記為：強力支撐/部分支撐/證據不足。
+### 0. 交易摘要 (Desk Take)
+表格：立場（看多/看空/中性偏多/中性偏空）、信心（1-5）、時間框、主要工具（真實代號）、關鍵催化劑（事件+日期）、失效條件（可觀測數字）、資訊優勢 Edge（相對共識的增量或「無增量」）。
 
-## 三、數據與證據稽核 (Data & Evidence Audit)
-列出所有關鍵數據，評估時效性與來源可靠性。補充遺漏數據。識別混淆變數。
+### 1. 執行摘要 (Executive Summary)
+6-10 句核心論點、框架與結論。標示投資方向及時間維度。資訊價值評級 A/B/C 並說明理由。
 
-## 四、市場背景與宏觀框架 (Market Context)
-當前宏觀環境定位。資產類別技術面/資金面/情緒面。政策動向影響。市場定價是否已反映觀點。
+### 2. 核心論點逐項拆解 (Thesis Deconstruction)
+每論點四行：邏輯鏈條、嚴謹度（強力支撐/部分支撐/證據不足）、最強反方觀點、可驗證性。
 
-## 五、風險矩陣 (Risk Matrix)
-| 風險類別 | 具體風險 | 發生概率 | 影響程度 |
-|---------|---------|---------|---------|
-分類為宏觀/政策/市場/基本面/流動性風險。區分短期波動vs長期結構性風險。提供風險監控指標。
+### 3. 數據與證據稽核 (Data & Evidence Audit)
+表格：影片數據 | 時間戳 | 稽核結論（準確/大致準確但有偏差/需脈絡化/無法核實）| 遺漏或混淆變數。
 
-## 六、可行動洞察 (Actionable Insights)
-分級建議：若同意→實施方案；若部分同意→調整策略；若不同意→替代策略。具體止損/止盈框架。
+### 4. 市場背景與定價 (Market Context & Pricing)
+宏觀定位、資產類別技術/資金/情緒面。關鍵：區分「已定價」與「未定價」的部分，指出市場共識所在。
 
-## 七、綜合評分 (Overall Assessment)
-| 維度 | 評分 |
-|-----|-----|
-| 分析深度/邏輯嚴謹度/數據可靠性/實用性/時效性/原創性 | ★★★★★ |
+### 5. 風險矩陣 (Risk Matrix)
+表格：風險類別 | 具體風險 | 發生概率 | 影響程度 | 時期。末行給風險監控指標。
 
-綜合評級：___/10。推薦閱讀：是/有保留/否。一句話總結。"""
+### 6. 可行動洞察 (Actionable Insights)
+先給工具對映表（想法 | 工具代號 | 方向 | 觸發條件 | 失效條件），再分「同意/部分同意（基準）/不同意」三情境給具體做法；無可執行內容寫「無操作」。
+
+### 7. 綜合評分 (Overall Assessment)
+表格：分析深度/邏輯嚴謹度/數據可靠性/可交易性/時效性/原創性，各 x.x/5 附一句理由。綜合評級 x.x/10。結論：值得關注/一般/可略過。最後一句「若只能記住一件事」。"""
 
 
-def analyze_video(video: dict, persona: str, auth: dict,
-                  timeout: int, max_retries: int) -> dict:
-    """Send one video URL to Gemini — it resolves the transcript directly from the URL."""
+# Digest-level synthesis: one extra pass over today's per-video notes.
+_SYNTHESIS_PROMPT = """You are the head of research at a multi-asset fund. Below are today's analyst notes on finance videos, each written independently.
+
+Synthesize them into a one-page desk briefing in Traditional Chinese (繁體中文), then stop. Rules: never invent facts, tickers or dates; if the evidence across the videos is thin on a point, say so; keep it short and decision-oriented; no disclaimers.
+
+## 1. 今日核心訊息
+3-5 條 bullets，每條 ≤ 35 字，只寫對倉位有影響的訊息。數字若來自影片而無法獨立核實，標註（未經核實）。
+
+## 2. 跨影片一致性與矛盾
+哪些影片指向同一方向（用「頻道 + 影片標題前 20 字」指名，不要只寫「影片 3」），哪些互相矛盾並說明分歧點。
+
+## 3. 可執行清單
+表格：想法 | 工具（真實代號） | 方向 | 理由 | 催化劑/日期 | 失效條件。
+- 有高信心想法就列 Top 3。
+- 沒有高信心交易時，仍然要列出「條件式觀察名單」最多 3 條（觸發條件 + 到價才動作），並在表格上方寫明「今日無高信心交易」。
+
+## 4. 需要追蹤的數據與日期
+只列今日或之後的事件（今天日期見上）。影片提到但已過去的日期，標為「已過去」或直接省略。
+
+## 5. 整體市場姿態
+一行：risk-on / risk-off / 觀望，並給一句理由。
+
+## 6. 今日最大盲點
+所有影片共同忽略或共同假設錯了的變數（若無，寫「無明顯共同盲點」）。
+
+=== 今日各影片分析 ===
+{analyses}
+"""
+
+
+
+def linkify_timestamps(text: str, video_url: str) -> str:
+    """Turn bare [mm:ss] / [hh:mm:ss] markers into markdown timestamp links.
+
+    Gemini sometimes emits the plain-bracket form even when asked for links;
+    deterministic post-processing keeps the citations clickable either way.
+    """
+    if not text or not video_url:
+        return text
+    base = video_url.split("&t=")[0]
+
+    def _to_secs(ts: str) -> int:
+        parts = [int(p) for p in ts.split(":")]
+        secs = 0
+        for p in parts:
+            secs = secs * 60 + p
+        return secs
+
+    def _sub(m: re.Match) -> str:
+        ts = m.group(1)
+        return f"[[{ts}]({base}&t={_to_secs(ts)})]"
+
+    return re.sub(r"\[(\d{1,2}:\d{2}(?::\d{2})?)\](?!\()", _sub, text)
+
+
+def _run_gemini(prompt: str, auth: dict, timeout: int,
+                max_retries: int, label: str = "") -> tuple[Optional[str], str]:
+    """One Gemini webapi call via the bundled CLI. Returns (analysis, last_error).
+
+    gemini.py emits a pointer JSON on stdout: {"ok":true,"f":"<path>","s":N};
+    the full text lives in that file. Falls back to an inline "text" field.
+    """
     env = os.environ.copy()
     env["GEMINI_SID"] = auth.get("__Secure-1PSID", "")
     env["GEMINI_TS"] = auth.get("__Secure-1PSIDTS", "")
-
-    if persona:
-        prompt = f"{persona}\n\n影片連結：{video['url']}\n頻道：{video['channel']}\n標題：{video['title']}\n發布時間：{video['published']}"
-    else:
-        prompt = _BUILTIN_PROMPT.format(
-            url=video["url"], channel=video["channel"],
-            title=video["title"], published=video["published"])
-
     last_error = ""
 
     for attempt in range(max_retries + 1):
@@ -323,9 +374,6 @@ def analyze_video(video: dict, persona: str, auth: dict,
                 try:
                     stdout_json = json.loads(result.stdout.strip())
                     if stdout_json.get("ok"):
-                        # gemini.py emits a pointer JSON: {"ok":true,"f":"<path>","s":N}.
-                        # The full response (text) is written to that file. Fall back
-                        # to an inline "text" field if present (older CLI versions).
                         analysis = None
                         fpath = stdout_json.get("f")
                         if fpath:
@@ -340,9 +388,7 @@ def analyze_video(video: dict, persona: str, auth: dict,
                         if not analysis:
                             analysis = stdout_json.get("text")
                         if analysis and len(analysis) > 80:
-                            return {"video_id": video["video_id"], "title": video["title"],
-                                    "channel": video["channel"], "url": video["url"],
-                                    "analysis": analysis, "ok": True}
+                            return analysis, ""
                         last_error = (f"ok but analysis short/missing "
                                       f"({len(analysis or '')} chars)")
                     else:
@@ -357,19 +403,104 @@ def analyze_video(video: dict, persona: str, auth: dict,
 
         except subprocess.TimeoutExpired:
             last_error = "timeout"
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             last_error = str(e)
 
         if attempt < max_retries and "AUTH_EXPIRED" not in last_error:
             delay = (attempt + 1) * 10
-            log(f"  Retry {attempt + 1}/{max_retries} for {video['title'][:40]}... "
+            log(f"  Retry {attempt + 1}/{max_retries} for {label[:40]}... "
                 f"({last_error[:80]}, waiting {delay}s)")
             time.sleep(delay)
+
+    return None, last_error
+
+
+def analyze_video(video: dict, persona: str, auth: dict,
+                  timeout: int, max_retries: int) -> dict:
+    """Send one video URL to Gemini — it resolves the transcript directly from the URL."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    if persona:
+        prompt = (f"{persona}\n\n今日日期：{today}\n影片連結：{video['url']}"
+                  f"\n頻道：{video['channel']}\n標題：{video['title']}"
+                  f"\n發布時間：{video['published']}")
+    else:
+        prompt = _BUILTIN_PROMPT.format(
+            url=video["url"], channel=video["channel"],
+            title=video["title"], published=video["published"], today=today)
+
+    analysis, last_error = _run_gemini(prompt, auth, timeout, max_retries,
+                                       label=video["title"])
+    if analysis:
+        return {"video_id": video["video_id"], "title": video["title"],
+                "channel": video["channel"], "url": video["url"],
+                "analysis": linkify_timestamps(analysis, video["url"]),
+                "ok": True}
 
     return {"video_id": video["video_id"], "title": video["title"],
             "channel": video["channel"], "url": video["url"],
             "analysis": f"Analysis failed ({max_retries + 1} attempts): {last_error}",
             "ok": False}
+
+
+def extract_rating(analysis: str) -> Optional[float]:
+    """Pull the overall score out of a note ('綜合評級：6.5 / 10' or '6.5/10')."""
+    if not analysis:
+        return None
+    pats = [
+        r"綜合評級[^0-9]{0,20}(\d{1,2}(?:\.\d)?)\s*/\s*10",
+        r"綜合評分[^0-9]{0,20}(\d{1,2}(?:\.\d)?)\s*/\s*10",
+        r"(\d{1,2}(?:\.\d)?)\s*/\s*10",
+    ]
+    for p in pats:
+        m = re.search(p, analysis)
+        if m:
+            try:
+                v = float(m.group(1))
+                if 0 <= v <= 10:
+                    return v
+            except ValueError:
+                pass
+    return None
+
+
+def _rank(results: list[dict]) -> list[dict]:
+    """Highest-scoring notes first; failures last. Keeps the email decision-first."""
+    return sorted(
+        results,
+        key=lambda r: (0 if r.get("ok") else 1,
+                       -(extract_rating(r.get("analysis", "")) or 0.0),
+                       r.get("channel", "")),
+    )
+
+
+def synthesize_digest(results: list[dict], auth: dict,
+                      timeout: int) -> str:
+    """One extra pass over today's notes -> cross-video desk briefing.
+
+    Returns "" on failure (the email degrades to per-video notes only).
+    """
+    if os.environ.get("YT_GEM_SYNTHESIS", "1").lower() in ("0", "false", "no"):
+        return ""
+    ok = [r for r in results if r.get("ok")]
+    if len(ok) < 2:
+        log("Synthesis skipped (fewer than 2 successful analyses)")
+        return ""
+    chunk_cap = _env_int("YT_GEM_SYNTHESIS_CHARS", "2500")
+    blocks = []
+    for i, r in enumerate(ok, 1):
+        blocks.append(
+            f"\n--- 影片 {i} [{r['channel']}] {r['title']}\n"
+            f"URL: {r['url']}\n{r['analysis'][:chunk_cap]}\n")
+    prompt = _SYNTHESIS_PROMPT.format(analyses="".join(blocks))
+    prompt = f"今日日期：{datetime.now().strftime('%Y-%m-%d')}\n\n{prompt}"
+    log(f"Synthesizing cross-video briefing ({len(ok)} videos, "
+        f"{len(prompt)} prompt chars)")
+    analysis, err = _run_gemini(prompt, auth, timeout, 1, label="digest synthesis")
+    if not analysis:
+        log(f"Synthesis failed: {err}")
+        return ""
+    log(f"Synthesis OK ({len(analysis)} chars)")
+    return analysis
 
 
 # ── Email ──────────────────────────────────────────────────────────────────
@@ -417,7 +548,8 @@ Check Time: {start_time.strftime('%Y-%m-%d %H:%M:%S')} UTC
 
 
 def _send_report_email(channels: dict, results: list[dict],
-                       ok_count: int, start_time: datetime) -> None:
+                       ok_count: int, start_time: datetime,
+                       summary: str = "") -> None:
     date_str = start_time.strftime("%Y年%m月%d日")
 
     # Conclusion infographic (Gemini web image gen) — skip on any failure
@@ -436,7 +568,8 @@ def _send_report_email(channels: dict, results: list[dict],
         html = ytgem_email.build_html(
             date_str, results,
             {"infographic_cids": [f"infographic{i}" for i in range(len(img_paths))],
-             "channel_count": len(channels)})
+             "channel_count": len(channels),
+             "digest_summary": summary})
         sent = ytgem_email.send_html(subject, html, image_paths=img_paths)
         if sent:
             log("HTML email sent"
@@ -460,6 +593,8 @@ def _send_report_email(channels: dict, results: list[dict],
             f"{r['analysis']}\n"
         )
 
+    summary_block = f"\n{'=' * 60}\n今日綜合研判 (Cross-video Desk Briefing)\n{'=' * 60}\n{summary}\n" if summary else ""
+
     body = f"""YouTube Finance Daily Deep Analysis Report
 Date: {date_str}
 Engine: Gemini — {MODEL} + {THINKING} thinking
@@ -469,7 +604,7 @@ Monitored Channels ({len(channels)}):
 {channel_list}
 
 Videos Today: {len(results)} ({ok_count}/{len(results)} analyzed successfully)
-
+{summary_block}
 {''.join(video_sections)}
 
 {'=' * 60}
@@ -477,9 +612,9 @@ Videos Today: {len(results)} ({ok_count}/{len(results)} analyzed successfully)
 Notes:
 • Analysis engine: Gemini {MODEL} ({THINKING} thinking) via gemini-webapi
 • Content source: YouTube URLs passed directly — no transcript extraction needed
-• Each video analyzed individually with 7-dimension framework:
-  Executive Summary → Thesis Deconstruction → Data Audit → Market Context →
-  Risk Matrix → Actionable Insights → Overall Assessment
+• Each video analyzed individually against the buy-side desk-note standard
+  (Desk Take → Thesis → Data Audit → Market Pricing → Risk Matrix →
+   Actionable Insights → Scored Assessment), then synthesized across videos
 • Analysis persona: {'GEM_SYSTEM_PROMPT.md (custom)' if os.path.exists(PROMPT_FILE) and os.path.getsize(PROMPT_FILE) > 10 else 'built-in institutional analyst'}
 • Schedule: daily automated via GitHub Actions
 """
@@ -587,9 +722,14 @@ def main() -> int:
     results.sort(key=lambda r: all_videos.index(
         next(v for v in all_videos if v["video_id"] == r["video_id"])))
 
-    # 7. Email report
+    # Rank decision-first: best-scoring note at the top, failures last.
+    # (Applied before synthesis so the briefing's 影片 N references match the email.)
+    results = _rank(results)
+
+    # 7. Email report (with cross-video synthesis)
     ok_count = sum(1 for r in results if r["ok"])
-    _send_report_email(channels, results, ok_count, start_time)
+    summary = synthesize_digest(results, auth, GEMINI_TIMEOUT)
+    _send_report_email(channels, results, ok_count, start_time, summary)
     _touch_heartbeat()
 
     elapsed = (datetime.now() - start_time).total_seconds()
