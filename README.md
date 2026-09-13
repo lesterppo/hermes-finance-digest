@@ -128,6 +128,22 @@ All environment variables (see `CONFIG.md` for full list):
 
 AI coding agents (Claude Code, Codex, Hermes Agent, Cursor, etc.) should read `AGENTS.md` for a complete zero→deployed walkthrough with exact commands and configuration steps.
 
+### Operational notes for maintainers
+
+- **Infographic language** — the NotebookLM prompt must state the language rule in
+  both English and Chinese. With an English-only instruction NotebookLM renders
+  Chinese headlines in English ("BlackRock View", "One-Hammer Tone?").
+- **Artifact reuse** — NotebookLM caps artifact generation per notebook per day
+  (~3). The pipeline reuses an artifact already completed today; use
+  `NLM_NOTEBOOK_TAG` (workflow input `nlm_notebook_tag`) to force a fresh
+  notebook when verifying a changed prompt.
+- **Testing without an inbox** — `ignore_seen=1` re-analyses the window and the
+  emailed HTML plus both images are uploaded as run artifacts, so the delivered
+  report can be reviewed without opening the mailbox.
+- **Scoring order** — notes are ranked by the score they state (`綜合評級：x.x / 10`)
+  before the email is built, and the cross-video briefing runs after ranking so
+  its "影片 N" references line up.
+
 ## Keywords
 
 YouTube video analysis, Gemini AI, automated email digest, financial news summary, YouTube transcript analysis, Google Gemini, GitHub Actions cron, video content analyzer, AI-powered newsletter, YouTube scraper, daily video digest, institutional research automation

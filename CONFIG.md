@@ -43,3 +43,7 @@ YT_GEM_RECIPIENT=recipient@email.com
 
 # ── TESTING ─────────────────────────────────────────────────────────────────
 # DIGEST_DRY_RUN=1              # run the whole pipeline but send no email
+# YT_GEM_IGNORE_SEEN=1          # ignore the seen-videos cache (re-analyse all)
+# YT_GEM_DUMP_ANALYSES=/path    # dump the raw notes as JSON for offline QA
+# NLM_NOTEBOOK_TAG=xyz          # suffix the NotebookLM notebook title, giving
+#                               # a fresh artifact budget for prompt testing
