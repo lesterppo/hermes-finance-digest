@@ -174,6 +174,9 @@ def send_html(subject: str, html: str,
             f.write(html)
     except Exception:
         pass
+    if os.environ.get("DIGEST_DRY_RUN", "").lower() in ("1", "true", "yes"):
+        print(f"DRY RUN — email suppressed (would send: {subject})")
+        return True
     user, pw, recipient = load_smtp()
     if not user or not pw or not recipient:
         print("ERROR: SMTP not configured", file=sys.stderr)
