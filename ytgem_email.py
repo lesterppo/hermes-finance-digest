@@ -203,6 +203,12 @@ def make_infographics(results: list[dict]) -> list[str]:
             from datetime import datetime as _dt
             nb_title = (f"Finance YouTube Daily Digest — "
                         f"{_dt.now().strftime('%Y-%m-%d')}")
+            # Optional run-scoped tag: a fresh notebook title gets its own
+            # NotebookLM artifact budget, handy for verifying a changed
+            # infographic prompt without waiting for the next day.
+            _tag = (os.environ.get("NLM_NOTEBOOK_TAG") or "").strip()
+            if _tag:
+                nb_title = f"{nb_title} [{_tag}]"
             nb = infographic.nlm_ensure_notebook(nb_title)
             srcs = []
             for it in items[:6]:
