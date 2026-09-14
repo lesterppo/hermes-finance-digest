@@ -206,7 +206,8 @@ def scrape_channel_videos(channel_ref: str, cutoff: datetime) -> list[dict]:
     """channel_ref: url path segment — '@handle', 'channel/UCxxxx' or 'c/name'."""
     ref = channel_ref if "/" in channel_ref or channel_ref.startswith("@") \
         else f"@{channel_ref}"
-    label = ref.split("/")[-1].lstrip("@")
+    # Labels may be percent-encoded in channels.txt — decode for display.
+    label = urllib.parse.unquote(ref.split("/")[-1].lstrip("@"))
     url = f"https://www.youtube.com/{ref}/videos"
     resp = requests.get(url, timeout=30, headers={
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
