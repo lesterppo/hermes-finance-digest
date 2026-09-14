@@ -1,10 +1,16 @@
 # YouTube channels to monitor — one YouTube URL per line
 # Lines starting with # are comments/ignored.
 # Extract the @handle from any YouTube channel URL.
+# Non-ASCII handles may be percent-encoded; they are decoded automatically.
+# /channel/UCxxxx URLs are also accepted (for channels whose @handle 404s).
 
-# Example finance channels (replace with your own):
-# https://www.youtube.com/@YourChannel1
-# https://www.youtube.com/@YourChannel2
-
-https://www.youtube.com/@MeiTouNews
+https://www.youtube.com/@sunriches
+https://www.youtube.com/@Amber%E7%A0%94%E8%82%A1%E8%AE%B0
+https://www.youtube.com/@Selina%E8%81%8A%E7%BE%8E%E8%82%A1
 https://www.youtube.com/@bellafinance
+https://www.youtube.com/@MeiTouNews
+https://www.youtube.com/@MeiTouJun
+https://www.youtube.com/@RhinoFinance
+
+# Removed by YouTube (Community Guidelines violation, checked 2026-09-13):
+# https://www.youtube.com/@MoneyDaddy7

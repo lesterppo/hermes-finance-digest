@@ -146,18 +146,41 @@ def _touch_heartbeat() -> None:
         pass
 
 
+def _channel_ref(line: str) -> Optional[tuple[str, str]]:
+    """Parse one channels.txt line into (label, url-path-segment).
+
+    Accepts `https://www.youtube.com/@Handle` (percent-encoded handles are
+    decoded) and `https://www.youtube.com/channel/UCxxxx` — some channels keep
+    a channel-ID URL reachable after their @handle stops resolving.
+    """
+    m = re.search(r"/@([A-Za-z0-9_%.~-]+)", line) or \
+        re.search(r"@([A-Za-z0-9_%.~-]+)", line)
+    if m:
+        label = urllib.parse.unquote(m.group(1))
+        return label, f"@{m.group(1)}"
+    m = re.search(r"/channel/(UC[A-Za-z0-9_-]{10,})", line)
+    if m:
+        return m.group(1), f"channel/{m.group(1)}"
+    m = re.search(r"/c/([A-Za-z0-9_%.-]+)", line)
+    if m:
+        label = urllib.parse.unquote(m.group(1))
+        return label, f"c/{m.group(1)}"
+    return None
+
+
 def load_channels(path: str) -> dict[str, str]:
+    """Returns {label: url-path-segment} for every configured channel."""
     channels: dict[str, str] = {}
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            m = re.search(r"@([a-zA-Z0-9_%-]+)", line)
-            if m:
-                raw_handle = m.group(1)
-                handle = urllib.parse.unquote(raw_handle)
-                channels[handle] = handle
+            parsed = _channel_ref(line)
+            if parsed:
+                channels[parsed[0]] = parsed[1]
+            else:
+                log(f"  WARNING: ignoring unparseable channel line: {line[:60]}")
     return channels
 
 
@@ -179,8 +202,12 @@ def parse_relative_time(text: str) -> Optional[datetime]:
     return now - deltas[unit]
 
 
-def scrape_channel_videos(handle: str, cutoff: datetime) -> list[dict]:
-    url = f"https://www.youtube.com/@{handle}/videos"
+def scrape_channel_videos(channel_ref: str, cutoff: datetime) -> list[dict]:
+    """channel_ref: url path segment — '@handle', 'channel/UCxxxx' or 'c/name'."""
+    ref = channel_ref if "/" in channel_ref or channel_ref.startswith("@") \
+        else f"@{channel_ref}"
+    label = ref.split("/")[-1].lstrip("@")
+    url = f"https://www.youtube.com/{ref}/videos"
     resp = requests.get(url, timeout=30, headers={
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
@@ -192,13 +219,13 @@ def scrape_channel_videos(handle: str, cutoff: datetime) -> list[dict]:
     if not match:
         match = re.search(r"ytInitialData\s*=\s*(\{.*?\});", html, re.DOTALL)
     if not match:
-        log(f"  {handle}: ytInitialData not found in page")
+        log(f"  {label}: ytInitialData not found in page")
         return []
 
     try:
         data = json.loads(match.group(1))
     except json.JSONDecodeError as e:
-        log(f"  {handle}: JSON decode error: {e}")
+        log(f"  {label}: JSON decode error: {e}")
         return []
 
     tabs = data.get("contents", {}).get("twoColumnBrowseResultsRenderer", {}).get("tabs", [])
@@ -229,7 +256,7 @@ def scrape_channel_videos(handle: str, cutoff: datetime) -> list[dict]:
             published_dt = parse_relative_time(published_text)
             if published_dt and published_dt >= cutoff:
                 videos.append({
-                    "channel": handle,
+                    "channel": label,
                     "title": title,
                     "video_id": video_id,
                     "url": f"https://www.youtube.com/watch?v={video_id}",
@@ -671,20 +698,35 @@ def main() -> int:
     cutoff = datetime.now(timezone.utc) - timedelta(hours=HOURS_BACK)
     all_videos: list[dict] = []
 
-    def _fetch_one(handle: str) -> list[dict]:
-        try:
-            return scrape_channel_videos(handle, cutoff)
-        except Exception as e:
-            log(f"  {handle}: ERROR — {e}")
-            return []
+    def _fetch_one(label: str, ref: str) -> list[dict]:
+        """Scrape one channel, retrying empty/failed fetches.
+
+        YouTube intermittently serves a page without ytInitialData (or with a
+        consent shell); a single silent empty result silently drops the channel
+        from the report, so retry before accepting "no videos".
+        """
+        for attempt in range(3):
+            try:
+                vids = scrape_channel_videos(ref, cutoff)
+            except Exception as e:  # noqa: BLE001
+                log(f"  {label}: attempt {attempt + 1} ERROR — {e}")
+                vids = []
+            if vids:
+                return vids
+            if attempt < 2:
+                time.sleep(4 * (attempt + 1))
+        log(f"  {label}: WARNING — 0 new videos after 3 attempts "
+            f"(throttled/empty page, or genuinely quiet channel)")
+        return []
 
     with ThreadPoolExecutor(max_workers=5) as ex:
-        futures = {ex.submit(_fetch_one, h): h for h in channels}
+        futures = {ex.submit(_fetch_one, label, ref): label
+                   for label, ref in channels.items()}
         for fut in as_completed(futures):
-            handle = futures[fut]
+            label = futures[fut]
             vids = fut.result()
             all_videos.extend(vids)
-            log(f"  {handle}: {len(vids)} new videos")
+            log(f"  {label}: {len(vids)} new videos")
 
     if not all_videos:
         log("No new videos — sending status email")
