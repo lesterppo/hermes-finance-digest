@@ -92,6 +92,10 @@ HEARTBEAT_FILE = os.path.expanduser(
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
+import market_data as md
+import market_llm as ml
+
+
 def log(msg: str) -> None:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{ts}] {msg}", flush=True)
@@ -504,8 +508,60 @@ def _rank(results: list[dict]) -> list[dict]:
     )
 
 
+# ── Market half (merged from the retired hermes-daily-finance pipeline) ────
+
+def market_section(auth: dict, timeout: int) -> dict:
+    """Collect the market snapshot + headlines and write the briefing.
+
+    ALWAYS returns a dict, and the email ships the raw market table even when
+    every LLM tier fails — a data-only briefing beats no briefing (that was the
+    retired pipeline's contract, and its numbers are the only source the prose
+    is allowed to use).
+    """
+    rows, merr = md.collect_market()
+    if merr:
+        log(f"[market] collect error: {merr}")
+    news: list[dict] = []
+    nerrs: list[str] = []
+    if rows:
+        news, nerrs = md.collect_news(max_items=_env_int("FIN_NEWS_ITEMS", "40"))
+    log(f"[market] {len(rows)} instruments, {len(news)} headlines, "
+        f"{len(nerrs)} feed error(s)")
+    chart = None
+    if rows:
+        try:
+            chart = md.make_chart(rows, log)
+            if chart:
+                log(f"[market] chart -> {chart}")
+        except Exception as e:  # noqa: BLE001
+            log(f"[market] chart failed: {e}")
+
+    report, source = "", "none"
+    if rows:
+        prompt = md.build_prompt(rows, news, datetime.now())
+        # tier 1: Gemini API key ladder · tier 3: OpenAI-compatible free slugs
+        report, err, source = ml.llm_report(prompt, log)
+        if not report:
+            # tier 2: the vendored gemini.py cookie path (the video path)
+            log(f"[market] key/free tiers failed ({err}) — trying the cookie path")
+            report, err2 = _run_gemini(prompt, auth, timeout, 1,
+                                       label="market briefing")
+            source = "gemini-web" if report else "none"
+            if not report:
+                log(f"[market] cookie tier failed too: {err2}")
+    if report:
+        log(f"[market] briefing OK via {source} ({len(report)} chars)")
+    else:
+        log("[market] NO briefing — email ships the raw table + headlines only")
+
+    return {"rows": rows, "news": news, "errors": nerrs,
+            "rows_html": md.market_table(rows) if rows else "",
+            "report": report or "", "source": source,
+            "chart": str(chart) if chart else None}
+
+
 def synthesize_digest(results: list[dict], auth: dict,
-                      timeout: int) -> str:
+                      timeout: int, market: dict | None = None) -> str:
     """One extra pass over today's notes -> cross-video desk briefing.
 
     Returns "" on failure (the email degrades to per-video notes only).
@@ -513,8 +569,9 @@ def synthesize_digest(results: list[dict], auth: dict,
     if os.environ.get("YT_GEM_SYNTHESIS", "1").lower() in ("0", "false", "no"):
         return ""
     ok = [r for r in results if r.get("ok")]
-    if len(ok) < 2:
-        log("Synthesis skipped (fewer than 2 successful analyses)")
+    has_market = bool((market or {}).get("rows"))
+    if len(ok) < 2 and not has_market:
+        log("Synthesis skipped (fewer than 2 successful analyses and no market data)")
         return ""
     chunk_cap = _env_int("YT_GEM_SYNTHESIS_CHARS", "2500")
     blocks = []
@@ -522,8 +579,23 @@ def synthesize_digest(results: list[dict], auth: dict,
         blocks.append(
             f"\n--- 影片 {i} [{r['channel']}] {r['title']}\n"
             f"URL: {r['url']}\n{r['analysis'][:chunk_cap]}\n")
+    market_block = ""
+    if has_market:
+        lines = []
+        for group, members in md.MARKET_GROUPS.items():
+            lines.append(f"[{group}]")
+            for sym in members:
+                r0 = next((x for x in market["rows"] if x["symbol"] == sym), None)
+                if r0 and r0.get("pct") is not None:
+                    lines.append(f"  {r0['label']} ({sym}): {md.fmt_value(r0)}  "
+                                 f"{md.fmt_change(r0)}")
+        heads = "\n".join(f"- [{n['source']}] {n['title']}"
+                          for n in (market.get("news") or [])[:20]) or "(none)"
+        market_block = (
+            "今日市場數據（唯一可引用的數字來源，不得自行補充）：\n"
+            + "\n".join(lines) + "\n\n今日財經頭條：\n" + heads + "\n\n")
     prompt = _SYNTHESIS_PROMPT.format(analyses="".join(blocks))
-    prompt = f"今日日期：{datetime.now().strftime('%Y-%m-%d')}\n\n{prompt}"
+    prompt = f"今日日期：{datetime.now().strftime('%Y-%m-%d')}\n\n{market_block}{prompt}"
     log(f"Synthesizing cross-video briefing ({len(ok)} videos, "
         f"{len(prompt)} prompt chars)")
     analysis, err = _run_gemini(prompt, auth, timeout, 1, label="digest synthesis")
@@ -580,14 +652,30 @@ Check Time: {start_time.strftime('%Y-%m-%d %H:%M:%S')} UTC
 
 def _send_report_email(channels: dict, results: list[dict],
                        ok_count: int, start_time: datetime,
-                       summary: str = "") -> None:
+                       summary: str = "", market: dict | None = None) -> None:
     date_str = start_time.strftime("%Y年%m月%d日")
 
     # Conclusion infographic (Gemini web image gen) — skip on any failure
     img_path = None
     try:
         import ytgem_email
-        img_paths = ytgem_email.make_infographics(results)
+        img_paths = ytgem_email.make_infographics(
+            results, market_chart=(market or {}).get("chart"))
+        # CID names must match the MIME parts exactly; the market chart is
+        # prepended by make_infographics, so it owns infographic0.
+        cids = [f"infographic{i}" for i in range(len(img_paths))]
+        mchart = (market or {}).get("chart")
+        chart_cid = cids[img_paths.index(mchart)] if mchart and mchart in img_paths else None
+        labels = []
+        for p in img_paths:
+            if p == mchart:
+                labels.append("市場快照 — 指數 / 商品 / 利率 / 加密貨幣（matplotlib 本地渲染，"
+                              "標籤為 ASCII 以免 CJK 字型缺字）")
+            elif "pulse" in os.path.basename(p):
+                labels.append("影片方向分佈圖 — 由當日影片分析數據本地渲染："
+                              "▲ 看多 · ▼ 看空 · ◆ 中性/事件")
+            else:
+                labels.append("市場脈搏儀表板 — Gemini NotebookLM 依 attached 來源生成")
         log("Infographics: " + (", ".join(img_paths) if img_paths else "skipped"))
     except Exception as e:  # noqa: BLE001
         img_paths = []
@@ -598,9 +686,11 @@ def _send_report_email(channels: dict, results: list[dict],
         import ytgem_email
         html = ytgem_email.build_html(
             date_str, results,
-            {"infographic_cids": [f"infographic{i}" for i in range(len(img_paths))],
+            {"infographic_cids": cids,
+             "infographic_labels": labels,
              "channel_count": len(channels),
-             "digest_summary": summary})
+             "digest_summary": summary,
+             "market": ({**market, "chart_cid": chart_cid} if market else None)})
         sent = ytgem_email.send_html(subject, html, image_paths=img_paths)
         if sent:
             log("HTML email sent"
@@ -624,7 +714,23 @@ def _send_report_email(channels: dict, results: list[dict],
             f"{r['analysis']}\n"
         )
 
-    summary_block = f"\n{'=' * 60}\n今日綜合研判 (Cross-video Desk Briefing)\n{'=' * 60}\n{summary}\n" if summary else ""
+    summary_block = f"\n{'=' * 60}\n今日綜合研判 (Cross-source Desk Briefing)\n{'=' * 60}\n{summary}\n" if summary else ""
+
+    market_block = ""
+    if market and market.get("rows"):
+        heads = "\n".join(f"  - [{n['source']}] {n['title']}"
+                          for n in (market.get("news") or [])[:20])
+        market_block = (
+            f"\n{'=' * 60}\n市場快照 (Market Snapshot)\n{'=' * 60}\n"
+            + "\n".join(f"  {r['label']} ({r['symbol']}): {md.fmt_value(r)}  "
+                        f"{md.fmt_change(r)}"
+                        for r in market["rows"] if r.get("pct") is not None)
+            + (f"\n\n財經頭條 (Headlines)\n{heads}" if heads else "")
+            + (f"\n\n{'=' * 60}\n市場與新聞研判 (Market & News Briefing)\n"
+               f"{'=' * 60}\n{market['report']}"
+               if (market.get("report") or "").strip() else
+               "\n\n(市場研判未能生成 — 以上數字為原始數據)")
+        )
 
     body = f"""YouTube Finance Daily Deep Analysis Report
 Date: {date_str}
@@ -635,6 +741,7 @@ Monitored Channels ({len(channels)}):
 {channel_list}
 
 Videos Today: {len(results)} ({ok_count}/{len(results)} analyzed successfully)
+{market_block}
 {summary_block}
 {''.join(video_sections)}
 
@@ -680,24 +787,33 @@ def main() -> int:
     if not persona:
         log("Using built-in 7-dimension institutional analyst prompt")
 
-    # 3. Load auth
-    if not os.path.exists(AUTH_JSON):
-        log(f"ERROR: {AUTH_JSON} not found — run: gemini-cli --init")
-        return 1
-    with open(AUTH_JSON) as f:
-        auth = json.load(f)
-    if not auth.get("__Secure-1PSID"):
-        log("ERROR: __Secure-1PSID missing from auth.json")
-        return 1
+    # 3. Load auth. NOT fatal any more: the video half needs the cookies, but the
+    #    market half runs on GEMINI_API_KEY, so a stale/missing cookie file must
+    #    degrade the digest, not cancel it.
+    auth: dict = {}
+    if os.path.exists(AUTH_JSON):
+        with open(AUTH_JSON) as f:
+            auth = json.load(f)
+        if not auth.get("__Secure-1PSID"):
+            log("WARNING: __Secure-1PSID missing from auth.json — video analysis disabled")
+            auth = {}
+        else:
+            auth_age_days = (time.time() - os.path.getmtime(AUTH_JSON)) / 86400
+            if auth_age_days > COOKIE_WARN_DAYS:
+                log(f"WARNING: auth.json is {auth_age_days:.0f} days old — run: gemini-cli --init")
+    else:
+        log(f"WARNING: {AUTH_JSON} not found — video analysis disabled "
+            f"(market briefing still runs on GEMINI_API_KEY)")
 
-    auth_mtime = os.path.getmtime(AUTH_JSON)
-    auth_age_days = (time.time() - auth_mtime) / 86400
-    if auth_age_days > COOKIE_WARN_DAYS:
-        log(f"WARNING: auth.json is {auth_age_days:.0f} days old — run: gemini-cli --init")
+    # 3b. Market half — always runs, independent of the cookie path
+    market = market_section(auth, GEMINI_TIMEOUT)
 
-    # 4. Scrape channels (parallel)
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=HOURS_BACK)
+    # 4. Scrape channels (parallel) — skipped without cookie auth
     all_videos: list[dict] = []
+    if not auth:
+        log("Skipping channel scrape (no Gemini cookie auth)")
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=HOURS_BACK)
+    _unused_all: list[dict] = []
 
     def _fetch_one(label: str, ref: str) -> list[dict]:
         """Scrape one channel, retrying empty/failed fetches.
@@ -730,8 +846,12 @@ def main() -> int:
             log(f"  {label}: {len(vids)} new videos")
 
     if not all_videos:
-        log("No new videos — sending status email")
-        _send_status_email(channels, start_time)
+        if market.get("rows"):
+            log("No new videos — sending the market/news briefing on its own")
+            _send_report_email(channels, [], 0, start_time, market=market)
+        else:
+            log("No new videos and no market data — sending status email")
+            _send_status_email(channels, start_time)
         _touch_heartbeat()
         return 0
 
@@ -741,8 +861,12 @@ def main() -> int:
     _save_seen_videos(seen)
 
     if not all_videos:
-        log("All videos already analyzed — sending status email")
-        _send_status_email(channels, start_time)
+        if market.get("rows"):
+            log("All videos already analysed — sending the market/news briefing")
+            _send_report_email(channels, [], 0, start_time, market=market)
+        else:
+            log("All videos already analysed and no market data — sending status email")
+            _send_status_email(channels, start_time)
         _touch_heartbeat()
         return 0
 
@@ -782,8 +906,9 @@ def main() -> int:
             log(f"Dumped analyses -> {dump}")
         except OSError as e:
             log(f"Dump failed: {e}")
-    summary = synthesize_digest(results, auth, GEMINI_TIMEOUT)
-    _send_report_email(channels, results, ok_count, start_time, summary)
+    summary = synthesize_digest(results, auth, GEMINI_TIMEOUT, market=market)
+    _send_report_email(channels, results, ok_count, start_time, summary,
+                       market=market)
     _touch_heartbeat()
 
     elapsed = (datetime.now() - start_time).total_seconds()

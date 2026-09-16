@@ -1,24 +1,31 @@
-# YouTube Finance Daily Digest — Agent Setup Guide
+# Finance Daily Digest (markets + news + YouTube) — Agent Setup Guide
 
 AI-agent-oriented documentation. Read this to deploy the full pipeline from zero,
 whether you are Claude Code, Codex, Hermes Agent, Cursor, or any other AI coding agent.
 
 ## What This Is
 
-A cron-driven pipeline that:
-1. Scrapes YouTube channels for recent videos via page scraping (works from any IP)
-2. Sends each video URL directly to **Gemini** (Flash Extended Thinking) — Gemini resolves transcripts natively
-3. Produces a buy-side desk note per video (Desk Take → Thesis → Data Audit → Market Pricing → Risk → Actionable → Scored)
-4. Runs one synthesis pass to build the cross-video briefing at the top of the email
-5. Compiles everything into an HTML email report (plus a matplotlib chart and a NotebookLM infographic)
+A cron-driven pipeline that produces ONE daily email from two halves:
+1. **Market half** (always runs): 31 instruments from yfinance + headlines from 10 RSS feeds (round-robin, per-source cap) → a market/news brief from the free LLM tiers → matplotlib chart
+2. **Video half** (needs cookies): scrapes YouTube channels for recent videos via page scraping (works from any IP)
+3. Sends each video URL directly to **Gemini** (Flash Extended Thinking) — Gemini resolves transcripts natively
+4. Produces a buy-side desk note per video (Desk Take → Thesis → Data Audit → Market Pricing → Risk → Actionable → Scored)
+5. Runs one synthesis pass across market data + headlines + notes to build the briefing at the top of the email
+6. Compiles everything into an HTML email report (plus charts and a NotebookLM infographic)
 6. Analysis persona loaded from `GEM_SYSTEM_PROMPT.md`; the same desk-note standard is embedded as a fallback prompt
 
-This repo is the canonical home; the earlier private fork (`youtube-gem-digest`) is archived.
+This repo is the canonical home: it is the merge of `hermes-daily-finance` (market
+data + headlines) and the original YouTube digest. The YouTube half is the survivor
+because its email/infographic stack and CI were more mature; the market half was
+ported in. `hermes-daily-finance` and the private fork `youtube-gem-digest` are
+archived — do NOT resurrect them; extend this repo instead.
 
 ## Architecture
 
 ```
 GitHub Actions (daily 02:00 UTC / 10:00 HKT)
+  ├── Market half: yfinance snapshot + 10 RSS feeds (round-robin)
+  │   └── market/news brief via free tiers: AI Studio key → Gemini cookies → OpenRouter :free
   ├── Page scraping (lockupViewModel) — parallel per channel
   ├── Per-video Gemini analysis — URL-direct, max 3 concurrent
   │   └── Desk-note standard: Desk Take → Thesis → Data → Pricing → Risk → Actionable → Scored
@@ -89,11 +96,14 @@ Go to repo → Settings → Secrets and variables → Actions → New repository
 
 | Secret Name | Value | Source |
 |------------|-------|--------|
+| `GEMINI_API_KEY` | Free AI Studio API key | https://aistudio.google.com/apikey — **required**: runner IPs are consent-walled for web cookies, so this is the only CI-safe Gemini tier |
 | `GEMINI_SID` | `__Secure-1PSID` value | From `~/.gemini-cli/auth.json` |
 | `GEMINI_TS` | `__Secure-1PSIDTS` value | From `~/.gemini-cli/auth.json` |
 | `YT_GEM_SMTP_USER` | Gmail address | User's Gmail |
 | `YT_GEM_SMTP_PASS` | Gmail app password | 16-char from myaccount.google.com/apppasswords |
 | `YT_GEM_RECIPIENT` | Destination email | Where reports are sent |
+| `OPENROUTER_API_KEY` | optional | Free fallback tier; every slug must end in `:free` |
+| `NLM_STORAGE_STATE_GZ` | optional | gzip+base64 NotebookLM storage state, for the dashboard |
 
 ### Step 7: Test Run
 ```bash
@@ -237,3 +247,27 @@ export YT_GEM_RECIPIENT="recipient@email.com"
 # Run
 python yt_gem_daily.py
 ```
+
+## Merge lessons (read before changing either half)
+
+- **A failed tier must degrade, not cancel** — with no LLM at all the email still
+  ships the raw market table + headlines. Never "fix" a broken tier by making the
+  run fail; the numbers are the part that must never be wrong.
+- **Round-robin the feeds** — collecting feed-by-feed then truncating let CNBC
+  (≈30 items) fill the entire headline quota and hid every other outlet.
+- **Re-probe feeds when one "breaks"** — Reuters' RSS is 404/DNS-dead and AP
+  returns 403 (verified 2026-09-17); that is a source problem, not a parser bug.
+- **Chart labels must be ASCII** — matplotlib's default font lacks CJK glyphs, so
+  Chinese instrument names render as empty boxes. Table text is unaffected.
+- **CID names must match MIME parts** — the market chart is prepended to the
+  infographic list, so it owns `infographic0`; a hand-written `marketchart` CID
+  pointed at a part that did not exist and rendered as a broken image.
+- **`market_llm` tier arity** — `api_report`/`fallback_report` return 3-tuples on
+  every path. A 2-tuple path survived review and would have crashed exactly when
+  all models failed (i.e. exactly when the fallback runs). Tests now call
+  `llm_report` with stubbed tiers.
+- **OpenRouter answers HTTP 200 with an `{"error": …}` body** for upstream
+  failures; keying straight into `data["choices"]` turns that into a bare
+  KeyError. Report the provider's message instead.
+- **No paid APIs** — the fallback tier is `:free` slugs only. A retired slug must
+  be replaced by another free model, never by a paid one.

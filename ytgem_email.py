@@ -104,7 +104,11 @@ def md_to_html(text: str) -> str:
 
 
 def build_html(date_str: str, results: list[dict], meta: dict) -> str:
-    """results: [{channel,title,url,analysis,ok}] — full digest HTML."""
+    """results: [{channel,title,url,analysis,ok}] — full digest HTML.
+
+    meta["market"] (optional) adds the market half of the merged digest:
+        {rows_html, report, chart_cid, news:[{source,title}], errors:[str]}
+    """
     ok = [r for r in results if r.get("ok")]
     cards = []
     for r in results:
@@ -138,6 +142,9 @@ def build_html(date_str: str, results: list[dict], meta: dict) -> str:
           margin:12px 0;}
     .card.summary{border:1px solid #1a7f37;background:#f2fbf4;}
     .card.summary .head{color:#1a7f37;}
+    .card.market{border:1px solid #8250df;background:#faf5ff;}
+    .card.market .head{color:#6639ba;}
+    ul.news li{margin:3px 0;}
     .head{font-weight:600;margin-bottom:6px;}
     a{color:#0969da;text-decoration:none;}
     .body{font-size:14px;}
@@ -156,9 +163,10 @@ def build_html(date_str: str, results: list[dict], meta: dict) -> str:
     info_html = ""
     cids = meta.get("infographic_cids") or (
         [meta["infographic_cid"]] if meta.get("infographic_cid") else [])
-    labels = ["方向分佈圖 — 由當日影片分析數據本地渲染（matplotlib）："
-              "▲ 看多 · ▼ 看空 · ◆ 中性/事件",
-              "市場脈搏儀表板 — Gemini NotebookLM 依 attached 影片來源生成"]
+    labels = meta.get("infographic_labels") or [
+        "方向分佈圖 — 由當日影片分析數據本地渲染（matplotlib）："
+        "▲ 看多 · ▼ 看空 · ◆ 中性/事件",
+        "市場脈搏儀表板 — Gemini NotebookLM 依 attached 影片來源生成"]
     if cids:
         info_html = "<h3>📌 今日重點一覽</h3>"
         for i, cid in enumerate(cids):
@@ -166,11 +174,51 @@ def build_html(date_str: str, results: list[dict], meta: dict) -> str:
                           f"alt='digest infographic {i+1}'/>")
             if i < len(labels):
                 info_html += f"<div class='cap'>{labels[i]}</div>"
+
+    # --- market half (merged from the retired daily-finance pipeline) --------
+    market = meta.get("market") or {}
+    market_html = ""
+    if market:
+        mrows = market.get("rows_html") or ""
+        mreport = market.get("report") or ""
+        mchart = market.get("chart_cid")
+        news = market.get("news") or []
+        head_items = "".join(
+            f"<li>[{n.get('source','')}] {n.get('title','')}</li>" for n in news[:16])
+        market_html = "\n<h2>🌍 市場快照</h2>"
+        if mchart:
+            market_html += (f"<img class='infographic' src='cid:{mchart}' "
+                            f"alt='market chart'/>")
+        market_html += mrows
+        if head_items:
+            market_html += f"\n<h2>📰 財經頭條</h2>\n<ul class='news'>{head_items}</ul>"
+        if mreport.strip():
+            market_html += f"""
+  <div class="card market">
+    <div class="head">🏛 市場與新聞研判 — 機構視角</div>
+    <div class="body">{md_to_html(mreport)}</div>
+  </div>"""
+        if market.get("errors"):
+            market_html += (f"<div class='cap'>新聞來源部分失敗："
+                            f"{'; '.join(market['errors'][:4])}</div>")
+
+    scene = []
+    if market:
+        scene.append(f"市場 {len(market.get('news') or [])} 則頭條")
+    if results:
+        scene.append(f"影片 {len(ok)}/{len(results)} 成功")
+    title = "📊 財經每日綜合簡報" if market else "📊 財經頻道每日深度分析"
+    meta_line = ("分析引擎：Gemini（API key → 網頁 cookie → 免費 fallback 分層）"
+                 if market else
+                 "分析引擎：Gemini Flash + Extended Thinking（webapi）")
+    if scene:
+        meta_line += " | " + " | ".join(scene)
+
     return f"""<html><head><meta charset="utf-8">{css}</head><body>
-<h1>📊 財經頻道每日深度分析 — {date_str}</h1>
-<div class="meta">分析引擎：Gemini Flash + Extended Thinking（webapi）
- | 影片：{len(ok)}/{len(results)} 成功 | {meta.get('channel_count','')} channels</div>
+<h1>{title} — {date_str}</h1>
+<div class="meta">{meta_line}</div>
 <hr/>
+{market_html}
 {summary_html}
 {''.join(cards)}
 <hr/>
@@ -179,13 +227,16 @@ def build_html(date_str: str, results: list[dict], meta: dict) -> str:
 </body></html>"""
 
 
-def make_infographics(results: list[dict]) -> list[str]:
-    """Conclusion infographics: (1) matplotlib data-viz pulse panel,
-    (2) Gemini NotebookLM dashboard grounded in the video sources
-    (dedicated daily notebook, YouTube links + takeaways attached)."""
+def make_infographics(results: list[dict], market_chart: str | None = None) -> list[str]:
+    """Conclusion infographics: (0) the market chart when the merged market half
+    is present, (1) matplotlib data-viz pulse panel, (2) Gemini NotebookLM
+    dashboard grounded in the video sources (dedicated daily notebook, YouTube
+    links + takeaways attached)."""
     if infographic is None:
-        return []
+        return [market_chart] if market_chart else []
     out = []
+    if market_chart:
+        out.append(market_chart)
     try:
         items = infographic.extract_verdicts_from_analyses(results)
         if not items:

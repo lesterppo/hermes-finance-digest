@@ -1,4 +1,4 @@
-name: YouTube Finance Daily Digest
+name: Finance Daily Digest (markets + news + YouTube)
 
 on:
   schedule:
@@ -40,7 +40,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install gemini-webapi browser-cookie3 loguru matplotlib
+          pip install gemini-webapi browser-cookie3 loguru matplotlib yfinance
 
       - name: Preflight — required repository secrets
         # Public repo: a forker must supply their own secrets, and a missing one
@@ -48,6 +48,7 @@ jobs:
         # SMTP/auth error mid-run (or silently sending no digest).
         # Only secret NAMES are ever printed — never values.
         env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_SID: ${{ secrets.GEMINI_SID }}
           GEMINI_TS: ${{ secrets.GEMINI_TS }}
           YT_GEM_SMTP_USER: ${{ secrets.YT_GEM_SMTP_USER }}
@@ -56,14 +57,14 @@ jobs:
           NLM_STORAGE_STATE_GZ: ${{ secrets.NLM_STORAGE_STATE_GZ }}
         run: |
           missing=""
-          for v in GEMINI_SID GEMINI_TS YT_GEM_SMTP_USER YT_GEM_SMTP_PASS YT_GEM_RECIPIENT; do
+          for v in GEMINI_API_KEY GEMINI_SID GEMINI_TS YT_GEM_SMTP_USER YT_GEM_SMTP_PASS YT_GEM_RECIPIENT; do
             [ -n "${!v}" ] || missing="$missing $v"
           done
           if [ -n "$missing" ]; then
             echo "::error::missing required repository secret(s):$missing — add them under Settings → Secrets and variables → Actions (see AGENTS.md 'Step 6: Set GitHub Secrets')."
             exit 1
           fi
-          echo "required secrets present: GEMINI_SID GEMINI_TS YT_GEM_SMTP_USER YT_GEM_SMTP_PASS YT_GEM_RECIPIENT (values never printed)"
+          echo "required secrets present: GEMINI_API_KEY GEMINI_SID GEMINI_TS YT_GEM_SMTP_USER YT_GEM_SMTP_PASS YT_GEM_RECIPIENT (values never printed)"
           if [ -z "$NLM_STORAGE_STATE_GZ" ]; then
             echo "::warning::NLM_STORAGE_STATE_GZ not set — NotebookLM infographic will be skipped (the matplotlib chart still ships)"
           fi
