@@ -111,6 +111,12 @@ jobs:
 
       - name: Run digest
         env:
+          # The market half's tier 1 (and the free fallback) must reach the run
+          # step too — the preflight only proves they exist, it does not export
+          # them. Without GEMINI_API_KEY here the digest silently downgrades to
+          # the cookie tier.
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           YT_GEM_SMTP_USER: ${{ secrets.YT_GEM_SMTP_USER }}
           YT_GEM_SMTP_PASS: ${{ secrets.YT_GEM_SMTP_PASS }}
           YT_GEM_RECIPIENT: ${{ secrets.YT_GEM_RECIPIENT }}

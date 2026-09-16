@@ -681,7 +681,8 @@ def _send_report_email(channels: dict, results: list[dict],
         img_paths = []
         log(f"Infographic skipped: {e}")
 
-    subject = f"📊 Finance Daily Deep Analysis — {date_str}"
+    subject = (f"📊 財經每日綜合簡報 — {date_str}" if (market or {}).get("rows")
+               else f"📊 Finance Daily Deep Analysis — {date_str}")
     try:
         import ytgem_email
         html = ytgem_email.build_html(
@@ -732,9 +733,9 @@ def _send_report_email(channels: dict, results: list[dict],
                "\n\n(市場研判未能生成 — 以上數字為原始數據)")
         )
 
-    body = f"""YouTube Finance Daily Deep Analysis Report
+    body = f"""{('財經每日綜合簡報 — 市場、新聞與影片分析' if (market or {}).get('rows') else 'YouTube Finance Daily Deep Analysis')}
 Date: {date_str}
-Engine: Gemini — {MODEL} + {THINKING} thinking
+Engine: Gemini — {MODEL} + {THINKING} thinking (video) / free key→cookie→:free (market)
 Method: Direct URL — Gemini resolves video transcripts natively
 
 Monitored Channels ({len(channels)}):
@@ -756,7 +757,8 @@ Notes:
 • Analysis persona: {'GEM_SYSTEM_PROMPT.md (custom)' if os.path.exists(PROMPT_FILE) and os.path.getsize(PROMPT_FILE) > 10 else 'built-in institutional analyst'}
 • Schedule: daily automated via GitHub Actions
 """
-    subject = f"📊 Finance Daily Deep Analysis — {date_str}"
+    subject = (f"📊 財經每日綜合簡報 — {date_str}" if (market or {}).get("rows")
+               else f"📊 Finance Daily Deep Analysis — {date_str}")
     _send_email(subject, body)
 
 

@@ -205,6 +205,12 @@ def test_orchestration_contract():
     wf = read(".github/workflows/daily.yml")
     check("workflow requires GEMINI_API_KEY", "GEMINI_API_KEY" in wf and "secrets.GEMINI_API_KEY" in wf)
     check("workflow installs yfinance", "yfinance" in wf)
+    run_step = wf.split("- name: Run digest")[1].split("- name:")[0]
+    check("run step receives GEMINI_API_KEY (preflight alone does not export it)",
+          "secrets.GEMINI_API_KEY" in run_step)
+    check("run step receives OPENROUTER_API_KEY", "secrets.OPENROUTER_API_KEY" in run_step)
+    check("merged subject differs from the video-only subject",
+          daily.count("財經每日綜合簡報") >= 1 and "Finance Daily Deep Analysis" in daily)
     check("workflow name reflects the merge", "markets + news + YouTube" in wf)
     check("requirements pin yfinance + matplotlib",
           "yfinance" in read("requirements.txt") and "matplotlib" in read("requirements.txt"))
