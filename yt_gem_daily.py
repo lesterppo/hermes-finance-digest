@@ -329,33 +329,53 @@ Deliver in Traditional Chinese (繁體中文):
 
 
 # Digest-level synthesis: one extra pass over today's per-video notes.
-_SYNTHESIS_PROMPT = """You are the head of research at a multi-asset fund. Below are today's analyst notes on finance videos, each written independently.
+_SYNTHESIS_PROMPT = """You are the head of research at a multi-asset fund. Below are today's analyst notes
+on finance videos, each written independently, PLUS today's market snapshot.
+Hierarchy of evidence: market data (highest) > headlines > videos (lowest).
+A video claim that contradicts market data loses; say so explicitly.
 
-Synthesize them into a one-page desk briefing in Traditional Chinese (繁體中文), then stop. Rules: never invent facts, tickers or dates; if the evidence across the videos is thin on a point, say so; keep it short and decision-oriented; no disclaimers.
+Synthesize into a one-page desk briefing in Traditional Chinese (繁體中文), then stop.
+Rules: never invent facts, tickers or dates; if evidence is thin, say so;
+keep it short and decision-oriented; no disclaimers; max 600 words total.
 
 ## 1. 今日核心訊息
-3-5 條 bullets，每條 ≤ 35 字，只寫對倉位有影響的訊息。數字若來自影片而無法獨立核實，標註（未經核實）。
+3–5條，每條 ≤35字，只寫對倉位有影響的訊息。數字若來自影片而無法獨立核實，標註（未經核實）。
 
 ## 2. 跨影片一致性與矛盾
-哪些影片指向同一方向（用「頻道 + 影片標題前 20 字」指名，不要只寫「影片 3」），哪些互相矛盾並說明分歧點。
+Cite EVERY video as 【channel《title前20字》】— never「影片1/2/3」alone.
+A synthesis containing「影片 [0-9]」without a channel name is INVALID and will be rejected.
+哪些指向同一方向，哪些互相矛盾並說明分歧點。
 
 ## 3. 可執行清單
-表格：想法 | 工具（真實代號） | 方向 | 理由 | 催化劑/日期 | 失效條件。
+表格：想法｜工具（真實代號）｜方向｜理由｜催化劑/日期｜失效條件。
 - 有高信心想法就列 Top 3。
-- 沒有高信心交易時，仍然要列出「條件式觀察名單」最多 3 條（觸發條件 + 到價才動作），並在表格上方寫明「今日無高信心交易」。
+- 沒有高信心交易時，仍然列出「條件式觀察名單」最多3條，並在表上方寫明「今日無高信心交易」。
 
 ## 4. 需要追蹤的數據與日期
-只列今日或之後的事件（今天日期見上）。影片提到但已過去的日期，標為「已過去」或直接省略。
+只列今日或之後的事件（今天日期見上）。已過去的日期標為「已過去」或省略。
 
 ## 5. 整體市場姿態
-一行：risk-on / risk-off / 觀望，並給一句理由。
+一行：risk-on / risk-off / 觀望 ＋ 一句理由，必須與市場數據（VIX、指數、債息方向）一致。
 
 ## 6. 今日最大盲點
 所有影片共同忽略或共同假設錯了的變數（若無，寫「無明顯共同盲點」）。
+必须点名至少一个市场数据中可见但影片未讨论的变量（如债息/油价/VIX异动），除非确实无关。
+
+=== 今日市場快照 ===
+{market_block}
 
 === 今日各影片分析 ===
 {analyses}
 """
+
+
+def _synthesis_needs_retry(synthesis: str) -> bool:
+    """Validator: bare '影片 N' refs without any 【channel《title》】cite → retry once."""
+    if not synthesis:
+        return False
+    has_bare = re.search(r"影片\s*[0-9]", synthesis) is not None
+    has_cite = re.search(r"【.+《.+》】", synthesis) is not None
+    return bool(has_bare and not has_cite)
 
 
 
@@ -364,6 +384,7 @@ def linkify_timestamps(text: str, video_url: str) -> str:
 
     Gemini sometimes emits the plain-bracket form even when asked for links;
     deterministic post-processing keeps the citations clickable either way.
+    Idempotent: existing markdown links [..](..) are left untouched.
     """
     if not text or not video_url:
         return text
@@ -380,7 +401,11 @@ def linkify_timestamps(text: str, video_url: str) -> str:
         ts = m.group(1)
         return f"[[{ts}]({base}&t={_to_secs(ts)})]"
 
-    return re.sub(r"\[(\d{1,2}:\d{2}(?::\d{2})?)\](?!\()", _sub, text)
+    # Split on existing markdown links so we never double-linkify inside them.
+    parts = re.split(r"(\[.*?\]\(.*?\))", text)
+    for i in range(0, len(parts), 2):
+        parts[i] = re.sub(r"\[(\d{1,2}:\d{2}(?::\d{2})?)\](?!\()", _sub, parts[i])
+    return "".join(parts)
 
 
 def _run_gemini(prompt: str, auth: dict, timeout: int,
@@ -594,14 +619,25 @@ def synthesize_digest(results: list[dict], auth: dict,
         market_block = (
             "今日市場數據（唯一可引用的數字來源，不得自行補充）：\n"
             + "\n".join(lines) + "\n\n今日財經頭條：\n" + heads + "\n\n")
-    prompt = _SYNTHESIS_PROMPT.format(analyses="".join(blocks))
-    prompt = f"今日日期：{datetime.now().strftime('%Y-%m-%d')}\n\n{market_block}{prompt}"
+    prompt = _SYNTHESIS_PROMPT.format(analyses="".join(blocks),
+                                      market_block=market_block or "(無市場數據)")
+    prompt = f"今日日期：{datetime.now().strftime('%Y-%m-%d')}\n\n{prompt}"
     log(f"Synthesizing cross-video briefing ({len(ok)} videos, "
         f"{len(prompt)} prompt chars)")
     analysis, err = _run_gemini(prompt, auth, timeout, 1, label="digest synthesis")
     if not analysis:
         log(f"Synthesis failed: {err}")
         return ""
+    if _synthesis_needs_retry(analysis):
+        log("Synthesis validator: bare 影片 N refs without channel cites — retrying once")
+        retry, err2 = _run_gemini(prompt, auth, timeout, 1, label="digest synthesis (retry)")
+        if retry and not _synthesis_needs_retry(retry):
+            analysis = retry
+        elif retry:
+            log("Synthesis retry still has bare refs — keeping retry output")
+            analysis = retry
+        else:
+            log(f"Synthesis retry failed: {err2} — keeping first output")
     log(f"Synthesis OK ({len(analysis)} chars)")
     return analysis
 

@@ -103,6 +103,166 @@ def md_to_html(text: str) -> str:
     return "\n".join(out)
 
 
+_THEME_GROUPS: list[tuple[str, str]] = [
+    # NOTE: pure-ASCII tokens MUST use \b boundaries — without them `AI`
+    # matches the 'ai' inside 'chain'/'against'/'Billionaire' (live bug 09-21:
+    # fashion-chain closures and inheritance advice landed in AI/科技).
+    ("央行/利率", r"央行|利率|聯儲|降息|加息|減息|債|殖利率|通脹|通膨|鮑威爾|\bFed\b|\bCPI\b|\bPPI\b|\bFOMC\b|\bPowell\b"),
+    ("AI/科技", r"科技|晶片|半導體|輝達|模型|算力|雲端|軟體|蘋果|微軟|特斯拉|\bAI\b|\bNVDA\b|\bOpenAI\b|\bAlphabet\b|\bMeta\b|\bTesla\b"),
+    ("貿易/關稅", r"貿易|關稅|出口|進口|順差|逆差|供應鏈|\btariff\b|\btariffs\b"),
+    ("能源/油價", r"能源|油價|原油|天然氣|布蘭特|汽油|銅|黃金|金價|\bOPEC\b|\bWTI\b"),
+    ("地緣", r"地緣|戰爭|烏克蘭|中東|台海|制裁|北約|俄羅斯|伊朗|以色列"),
+    ("財報", r"財報|業績|盈利|季度|指引|毛利|營收|\bearnings\b"),
+    ("加密", r"加密|比特|以太|穩定幣|\bBTC\b|\bETH\b|\bcrypt\b|ETF.*(比特|加密)"),
+]
+
+_CARD_STANCE_RE = re.compile(r"\|\s*(?:立場|投資方向|Stance)\s*\|\s*([^|\n]{1,60}?)\s*\|")
+_CARD_CONF_RE = re.compile(r"信心\D{0,10}([1-5])")
+_CARD_RATING_RE = re.compile(r"綜合評級[^0-9]{0,20}(\d{1,2}(?:\.\d)?)\s*/\s*10")
+_CARD_CONCL_RE = re.compile(r"結論\s*\*{0,2}\s*[:：]\s*([^\n—\-–|]{1,24})")
+_CARD_FAIL_RE = re.compile(r"失效條件[^|\n]*[|：:]\s*([^\n|]{4,120})")
+_CARD_ONETHING_RE = re.compile(r"若只能記住一件事[^\n]*[：:]\s*([^\n]{4,200})")
+_CARD_EXEC_RE = re.compile(r"###?\s*1\.\s*執行摘要[^\n]*\n((?:(?!\n#).){50,800})", re.S)
+
+
+def _key_levels_line(market: dict) -> str:
+    """One-line S&P / Nasdaq / TNX / WTI / BTC from market rows (fallback-safe)."""
+    rows = market.get("rows") or []
+    def _fmt(sym: str) -> str:
+        r = next((x for x in rows if x.get("symbol") == sym), None)
+        if not r or r.get("last") is None or r.get("pct") is None:
+            return "—"
+        last, prev = r["last"], r["prev"]
+        if sym in ("^TNX", "^TYX", "^FVX"):
+            bps = (last - prev) * 100.0
+            return f"{last:.2f}% ({bps:+.0f}bp)"
+        pct = r["pct"]
+        v = f"{last:,.0f}" if last >= 1000 else f"{last:,.2f}"
+        return f"{v} ({pct:+.2f}%)"
+    short = {"^GSPC": "S&P", "^IXIC": "Nasdaq", "^TNX": "TNX",
+             "CL=F": "WTI", "BTC-USD": "BTC"}
+    return "｜".join(f"{short[s]} {_fmt(s)}" for s in short)
+
+
+def _strip_30s(summary: str, market: dict) -> str:
+    """30秒速覽 (≤150字): posture line + Top-3 table + key-levels line.
+
+    Extracted from synthesis §1+§3+§5; market-only fallback when no synthesis.
+    """
+    posture = ""
+    if summary:
+        m = re.search(r"(risk-on|risk-off|觀望)[^\n]{0,60}", summary)
+        if m:
+            posture = m.group(0).strip()
+    tops: list[str] = []
+    if summary:
+        for m in re.finditer(r"^\s*\|([^|\n]{1,40})\|([^|\n]{1,20})\|([^|\n]{1,10})\|",
+                             summary, re.M):
+            cells = [c.strip() for c in m.groups()]
+            if any(k in cells[0] for k in ("想法", "---", "工具")):
+                continue
+            tops.append("｜".join(cells))
+            if len(tops) >= 3:
+                break
+    keyline = _key_levels_line(market)
+    if not summary.strip():
+        return (f"<b>30秒速覽</b>（市場數據速覽）：{keyline}。"
+                f"今日暫無綜合研判，以下為原始市場數據與頭條。")
+    bits = []
+    if posture:
+        bits.append(f"市場姿態：{posture}")
+    if tops:
+        rows = "".join(f"<tr><td>{t}</td></tr>" for t in tops)
+        bits.append(f"Top-3：<table>{rows}</table>")
+    bits.append(f"關鍵水平：{keyline}")
+    return "<b>30秒速覽</b><br/>" + "<br/>".join(bits)
+
+
+def _cluster_headlines(news: list[dict], cap: int = 12,
+                       max_groups: int = 5) -> list[tuple[str, list[dict]]]:
+    """Theme-clustered headlines: ≤12 items in 3–5 groups; drops the rest."""
+    buckets: dict[str, list[dict]] = {name: [] for name, _ in _THEME_GROUPS}
+    dropped = 0
+    for n in news or []:
+        title = n.get("title", "")
+        placed = False
+        for name, pat in _THEME_GROUPS:
+            if re.search(pat, title, re.I):
+                buckets[name].append(n)
+                placed = True
+                break
+        if not placed:
+            dropped += 1
+    groups = [(k, v) for k, v in buckets.items() if v]
+    groups.sort(key=lambda kv: -len(kv[1]))
+    groups = groups[:max_groups]
+    groups.sort(key=lambda kv: [g[0] for g in _THEME_GROUPS].index(kv[0]))
+    # round-robin fill up to cap so one theme can't eat the quota
+    out: dict[str, list[dict]] = {k: [] for k, _ in groups}
+    total = 0
+    rank = 0
+    while total < cap:
+        grew = False
+        for k, v in groups:
+            if rank < len(v) and total < cap:
+                out[k].append(v[rank])
+                total += 1
+                grew = True
+        if not grew:
+            break
+        rank += 1
+    return [(k, out[k]) for k, _ in groups if out[k]]
+
+
+def _abridged_card(r: dict) -> str:
+    """Abridged email card (~150 words) extracted from the full desk note.
+
+    Parses 立場/信心/綜合評級/結論/失效條件/若只能記住一件事 via regex;
+    on parse failure shows 詳見附錄 instead of guessing.
+    """
+    import html as _html
+    text = r.get("analysis") or ""
+    ch, title, url = r.get("channel", ""), r.get("title", ""), r.get("url", "")
+    short_t = title[:24]
+    if not r.get("ok") or not text.strip():
+        return (f"<b>{_html.escape(ch)}《{_html.escape(short_t)}》</b> — 分析失敗，"
+                f"<a href=\"{_html.escape(url)}\">詳見附錄</a>")
+    m = _CARD_STANCE_RE.search(text)
+    stance = m.group(1).strip() if m else ""
+    if not stance:
+        return (f"<b>{_html.escape(ch)}《{_html.escape(short_t)}》</b> — 詳見附錄 "
+                f"（<a href=\"{_html.escape(url)}\">影片連結</a>）")
+    m = _CARD_CONF_RE.search(text)
+    conf = m.group(1) if m else "?"
+    m = _CARD_RATING_RE.search(text)
+    rating = m.group(1) if m else "?"
+    m = _CARD_CONCL_RE.search(text)
+    concl = m.group(1).strip().strip("*：: ") if m else "詳見附錄"
+    m = _CARD_FAIL_RE.search(text)
+    fail = m.group(1).strip() if m else "詳見附錄"
+    m = _CARD_ONETHING_RE.search(text)
+    onething = m.group(1).strip() if m else ""
+    if not onething:
+        tails = [ln.strip() for ln in text.strip().split("\n") if ln.strip()]
+        onething = tails[-1][:120] if tails else "詳見附錄"
+    first = ""
+    m = _CARD_EXEC_RE.search(text)
+    if m:
+        blob = re.sub(r"\s+", " ", m.group(1)).strip()
+        first = blob.split("。")[0][:120] + ("。" if "。" in blob else "")
+    else:
+        mm = re.search(r"([^。！？\n]{10,120}[。！？])", text)
+        first = mm.group(1) if mm else ""
+    head = (f"### {_html.escape(ch)}《{_html.escape(short_t)}》——"
+            f"{_html.escape(stance)}｜信心{conf}｜{rating}/10｜{concl}")
+    bullets = "".join(
+        f"<li>{_html.escape(b)}</li>" for b in
+        ([f"一句話：{first}"] if first else [])
+        + [f"失效條件：{fail}", f"若只能記住一件事：{onething}"])
+    return (f"{head}<ul>{bullets}</ul>"
+            f"[全文見附錄｜<a href=\"{_html.escape(url)}\">影片連結</a>]")
+
+
 def build_html(date_str: str, results: list[dict], meta: dict) -> str:
     """results: [{channel,title,url,analysis,ok}] — full digest HTML.
 
@@ -110,20 +270,57 @@ def build_html(date_str: str, results: list[dict], meta: dict) -> str:
         {rows_html, report, chart_cid, news:[{source,title}], errors:[str]}
     """
     ok = [r for r in results if r.get("ok")]
-    cards = []
-    for r in results:
-        state = "✓" if r.get("ok") else "✗"
-        analysis = r.get("analysis") or ""
-        analysis = md_to_html(analysis)
-        if not r.get("ok"):
-            analysis = f"<i>{analysis}</i>"
-        cards.append(f"""
-  <div class="card">
-    <div class="head">{state} 【{r.get('channel','')}】
-      <a href="{r.get('url','')}">{r.get('title','')}</a></div>
-    <div class="body">{analysis}</div>
-  </div>""")
+    market = meta.get("market") or {}
     summary = meta.get("digest_summary") or ""
+
+    # --- 2. 30秒速覽 ------------------------------------------------------
+    strip_html = (f"\n<h2>⚡ 30秒速覽</h2>\n<div class=\"card strip\">"
+                  f"{_strip_30s(summary, market)}</div>" if (market or summary.strip())
+                  else "")
+
+    # --- 3. 市場快照 (chart + key-levels table) -------------------------------
+    mrows = market.get("rows_html") or ""
+    mchart = market.get("chart_cid")
+    snap_html = ""
+    if market:
+        snap_html = "\n<h2>🌍 市場快照</h2>"
+        if mchart:
+            snap_html += (f"<img class='infographic' src='cid:{mchart}' "
+                          f"alt='market chart'/>")
+        snap_html += mrows
+        if market.get("errors"):
+            snap_html += (f"<div class='cap'>新聞來源部分失敗："
+                          f"{'; '.join(market['errors'][:4])}</div>")
+
+    # --- 4. 財經頭條 (clustered, ≤12 in 3–5 groups) ---------------------------
+    news_html = ""
+    if market:
+        news = market.get("news") or []
+        groups = _cluster_headlines(news)
+        if groups:
+            parts = ["\n<h2>📰 財經頭條</h2>"]
+            shown = sum(len(v) for _, v in groups)
+            for theme, items in groups:
+                lis = "".join(
+                    f"<li>【{theme}】{n.get('title','')} "
+                    f"({n.get('source','')})</li>" for n in items)
+                parts.append(f"<h4>{theme}（{len(items)}）</h4>"
+                             f"<ul class='news'>{lis}</ul>")
+            if len(news) > shown:
+                parts.append(f"<div class='cap'>另有 {len(news) - shown} 則非市場驅動頭條已省略</div>")
+            news_html = "".join(parts)
+
+    # --- 5. 市場與新聞研判 ---------------------------------------------------
+    mreport = market.get("report") or ""
+    brief_html = ""
+    if mreport.strip():
+        brief_html = f"""
+  <div class="card market">
+    <div class="head">🏛 市場與新聞研判 — 機構視角</div>
+    <div class="body">{md_to_html(mreport)}</div>
+  </div>"""
+
+    # --- 6. 今日綜合研判 ------------------------------------------------------
     summary_html = ""
     if summary.strip():
         summary_html = f"""
@@ -144,6 +341,7 @@ def build_html(date_str: str, results: list[dict], meta: dict) -> str:
     .card.summary .head{color:#1a7f37;}
     .card.market{border:1px solid #8250df;background:#faf5ff;}
     .card.market .head{color:#6639ba;}
+    .card.strip{border:1px solid #C9A84C;background:#fffdf4;}
     ul.news li{margin:3px 0;}
     .head{font-weight:600;margin-bottom:6px;}
     a{color:#0969da;text-decoration:none;}
@@ -159,7 +357,10 @@ def build_html(date_str: str, results: list[dict], meta: dict) -> str:
     code{background:#f6f8fa;padding:1px 4px;border-radius:4px;font-size:12px;}
     .infographic{width:100%;border-radius:10px;margin:10px 0 2px;}
     .cap{color:#57606a;font-size:12px;}
+    details{border:1px solid #d0d7de;border-radius:10px;padding:8px 12px;margin:8px 0;}
+    summary{cursor:pointer;font-weight:600;font-size:14px;}
   </style>"""
+    # --- 7. 今日重點一覽 (market chart → pulse → NLM, captioned) --------------
     info_html = ""
     cids = meta.get("infographic_cids") or (
         [meta["infographic_cid"]] if meta.get("infographic_cid") else [])
@@ -167,40 +368,49 @@ def build_html(date_str: str, results: list[dict], meta: dict) -> str:
         "方向分佈圖 — 由當日影片分析數據本地渲染（matplotlib）："
         "▲ 看多 · ▼ 看空 · ◆ 中性/事件",
         "市場脈搏儀表板 — Gemini NotebookLM 依 attached 影片來源生成"]
+    ordered = []
     if cids:
-        info_html = "<h3>📌 今日重點一覽</h3>"
-        for i, cid in enumerate(cids):
-            info_html += (f"<img class='infographic' src='cid:{cid}' "
-                          f"alt='digest infographic {i+1}'/>")
-            if i < len(labels):
-                info_html += f"<div class='cap'>{labels[i]}</div>"
-
-    # --- market half (merged from the retired daily-finance pipeline) --------
-    market = meta.get("market") or {}
-    market_html = ""
-    if market:
-        mrows = market.get("rows_html") or ""
-        mreport = market.get("report") or ""
-        mchart = market.get("chart_cid")
-        news = market.get("news") or []
-        head_items = "".join(
-            f"<li>[{n.get('source','')}] {n.get('title','')}</li>" for n in news[:16])
-        market_html = "\n<h2>🌍 市場快照</h2>"
+        # lead with the market chart (spec §F-7), then pulse/NLM in CID order
         if mchart:
-            market_html += (f"<img class='infographic' src='cid:{mchart}' "
-                            f"alt='market chart'/>")
-        market_html += mrows
-        if head_items:
-            market_html += f"\n<h2>📰 財經頭條</h2>\n<ul class='news'>{head_items}</ul>"
-        if mreport.strip():
-            market_html += f"""
-  <div class="card market">
-    <div class="head">🏛 市場與新聞研判 — 機構視角</div>
-    <div class="body">{md_to_html(mreport)}</div>
-  </div>"""
-        if market.get("errors"):
-            market_html += (f"<div class='cap'>新聞來源部分失敗："
-                            f"{'; '.join(market['errors'][:4])}</div>")
+            for i, cid in enumerate(cids):
+                if cid == mchart:
+                    ordered.append((cid, "市場快照 — 指數 / 商品 / 利率 / "
+                                        "加密貨幣（matplotlib 本地渲染）"))
+                    break
+        for i, cid in enumerate(cids):
+            if cid == mchart:
+                continue
+            lab = labels[i] if i < len(labels) else ""
+            ordered.append((cid, lab))
+        info_html = "<h3>📌 今日重點一覽</h3>"
+        for j, (cid, lab) in enumerate(ordered):
+            info_html += (f"<img class='infographic' src='cid:{cid}' "
+                          f"alt='digest infographic {j+1}'/>")
+            if lab:
+                info_html += f"<div class='cap'>{lab}</div>"
+
+    # --- 8. 影片速覽卡 (abridged) ---------------------------------------------
+    abridged = [_abridged_card(r) for r in results] if results else []
+    cards_html = ""
+    if abridged:
+        cards_html = ("\n<h2>🎬 影片速覽卡</h2>\n<div class=\"card\">"
+                      + "<hr/>".join(abridged) + "</div>")
+
+    # --- 9. 附錄：完整桌案 (collapsed) -----------------------------------------
+    appendix = ""
+    if results:
+        blocks = []
+        for r in results:
+            state = "✓" if r.get("ok") else "✗"
+            body = md_to_html(r.get("analysis") or "")
+            if not r.get("ok"):
+                body = f"<i>{body}</i>"
+            blocks.append(
+                f"<details><summary>{state} 【{r.get('channel','')}】"
+                f"{r.get('title','')}</summary>"
+                f"<div><a href=\"{r.get('url','')}\">影片連結</a></div>"
+                f"<div class=\"body\">{body}</div></details>")
+        appendix = "\n<h2>📚 附錄：完整桌案</h2>\n" + "".join(blocks)
 
     scene = []
     if market:
@@ -212,18 +422,24 @@ def build_html(date_str: str, results: list[dict], meta: dict) -> str:
                  if market else
                  "分析引擎：Gemini Flash + Extended Thinking（webapi）")
     if scene:
-        meta_line += " | " + " | ".join(scene)
+        meta_line += "｜" + "｜".join(scene)
 
+    import time as _t
+    run_id = meta.get("run_id") or _t.strftime("%Y%m%d-%H%M")
     return f"""<html><head><meta charset="utf-8">{css}</head><body>
 <h1>{title} — {date_str}</h1>
 <div class="meta">{meta_line}</div>
 <hr/>
-{market_html}
+{strip_html}
+{snap_html}
+{news_html}
+{brief_html}
 {summary_html}
-{''.join(cards)}
-<hr/>
 {info_html}
-<div class="meta">自動化摘要 — 內容僅供參考，非投資建議。</div>
+{cards_html}
+<hr/>
+{appendix}
+<div class="meta">自動化摘要 — 內容僅供參考，非投資建議。數據來源：yfinance 市場數據＋公開 RSS 頭條＋YouTube 影片（URL-direct，Gemini 解析字幕）。run {run_id}</div>
 </body></html>"""
 
 
@@ -245,15 +461,18 @@ def make_infographics(results: list[dict], market_chart: str | None = None) -> l
             base = (it.get("stance") or "") + " " + (it.get("verdict") or "")
             it.setdefault("direction", infographic.verdict_direction(
                 base + " " + (it.get("title") or "")))
-        # 1. matplotlib pulse panel
-        img = infographic.render_videos_chart(items, title="財經影片今日重點")
+        # 1. matplotlib pulse panel (v2: 4 verbatim stance buckets, light theme)
+        from datetime import datetime as _dt2
+        img = infographic.render_videos_chart(
+            items, title="財經影片今日重點",
+            filedate=_dt2.now().strftime("%Y-%m-%d"))
         if img:
             out.append(img)
         # 2. NotebookLM infographic grounded in attached video sources
         try:
             from datetime import datetime as _dt
-            nb_title = (f"Finance YouTube Daily Digest — "
-                        f"{_dt.now().strftime('%Y-%m-%d')}")
+            today = _dt.now().strftime("%Y-%m-%d")
+            nb_title = f"財經每日綜合簡報 — {today}"
             # Optional run-scoped tag: a fresh notebook title gets its own
             # NotebookLM artifact budget, handy for verifying a changed
             # infographic prompt without waiting for the next day.

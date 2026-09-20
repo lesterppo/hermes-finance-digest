@@ -29,7 +29,10 @@ on:
 jobs:
   digest:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    concurrency:
+      group: finance-digest
+      cancel-in-progress: false
 
     steps:
       - uses: actions/checkout@v4
@@ -57,14 +60,17 @@ jobs:
           NLM_STORAGE_STATE_GZ: ${{ secrets.NLM_STORAGE_STATE_GZ }}
         run: |
           missing=""
-          for v in GEMINI_API_KEY GEMINI_SID GEMINI_TS YT_GEM_SMTP_USER YT_GEM_SMTP_PASS YT_GEM_RECIPIENT; do
+          for v in GEMINI_API_KEY YT_GEM_SMTP_USER YT_GEM_SMTP_PASS YT_GEM_RECIPIENT; do
             [ -n "${!v}" ] || missing="$missing $v"
           done
+          if [ -z "$GEMINI_SID" ] || [ -z "$GEMINI_TS" ]; then
+            echo "::warning::GEMINI_SID/TS not set — video half disabled, market half runs on API key"
+          fi
           if [ -n "$missing" ]; then
             echo "::error::missing required repository secret(s):$missing — add them under Settings → Secrets and variables → Actions (see AGENTS.md 'Step 6: Set GitHub Secrets')."
             exit 1
           fi
-          echo "required secrets present: GEMINI_API_KEY GEMINI_SID GEMINI_TS YT_GEM_SMTP_USER YT_GEM_SMTP_PASS YT_GEM_RECIPIENT (values never printed)"
+          echo "required secrets present: GEMINI_API_KEY YT_GEM_SMTP_USER YT_GEM_SMTP_PASS YT_GEM_RECIPIENT (values never printed)"
           if [ -z "$NLM_STORAGE_STATE_GZ" ]; then
             echo "::warning::NLM_STORAGE_STATE_GZ not set — NotebookLM infographic will be skipped (the matplotlib chart still ships)"
           fi
@@ -133,7 +139,14 @@ jobs:
         with:
           name: yt-digest-output
           path: |
-            ~/.hermes/digest_images/
+            ~/.hermes/digest_images/ytgem/chart_*.png
+            ~/.hermes/digest_images/ytgem/nlm_*.png
+            ~/.hermes/finance_daily/chart_*.png
             /tmp/yt_digest_email.html
           if-no-files-found: ignore
           retention-days: 3
+
+      - name: Summarize serving path
+        if: always()
+        run: |
+          echo "market backend: $(grep -a -m1 '\[market\] briefing OK' "$HOME/.hermes/finance_daily/last_run.log" || echo unknown)"

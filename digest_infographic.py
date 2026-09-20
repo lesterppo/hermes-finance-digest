@@ -233,9 +233,49 @@ def verdict_direction(text: str) -> int:
     return 0
 
 
+_PULSE_BUCKETS = ["看多", "中性偏多", "中性偏空", "看空"]
+_PULSE_COLORS = {
+    "看多": "#1e4e79",
+    "中性偏多": "#7aa6c2",
+    "中性偏空": "#c98b3a",
+    "看空": "#b03a2e",
+}
+_PULSE_NORM = {
+    "看多": "看多", "做多": "看多", "bullish": "看多", "偏多": "看多",
+    "中性偏多": "中性偏多",
+    "中性偏空": "中性偏空",
+    "看空": "看空", "做空": "看空", "bearish": "看空", "偏空": "看空",
+}
+
+
+def _pulse_bucket(item: dict) -> str:
+    """Verbatim 立場 bucket; falls back to verdict_direction only when unparseable."""
+    stance = (item.get("stance") or "").strip()
+    if stance in _PULSE_BUCKETS:
+        return stance
+    for key in ("中性偏多", "中性偏空", "看多", "看空"):
+        if key and key in stance:
+            return key
+    low = stance.lower()
+    for key, bucket in _PULSE_NORM.items():
+        if key in low:
+            return bucket
+    d = item.get("direction", verdict_direction(
+        (item.get("verdict") or "") + " " + (item.get("title") or "")))
+    if d == 1:
+        return "看多"
+    if d == -1:
+        return "看空"
+    return "無立場"
+
+
 def render_videos_chart(items: list[dict], title: str = "",
                         filedate: str = "") -> str | None:
-    """Pulse panel: sentiment split bar + takeaway list with marks."""
+    """Pulse v2: light-theme horizontal bars over 4 verbatim stance buckets.
+
+    Buckets: 看多 / 中性偏多 / 中性偏空 / 看空 (+ 無立場 for failures).
+    Labels are Traditional Chinese; the runner installs fonts-noto-cjk.
+    """
     import matplotlib
     matplotlib.use("Agg")
     from matplotlib import pyplot as plt
@@ -246,62 +286,54 @@ def render_videos_chart(items: list[dict], title: str = "",
     if not items:
         return None
     items = items[:6]
+    buckets: dict[str, int] = {b: 0 for b in _PULSE_BUCKETS}
+    n_none = 0
     for it in items:
-        it.setdefault("direction", verdict_direction(
-            (it.get("verdict") or "") + " " + (it.get("title") or "")))
-    n_bull = sum(1 for it in items if it.get("direction") == 1)
-    n_bear = sum(1 for it in items if it.get("direction") == -1)
-    n_neut = len(items) - n_bull - n_bear
-
-    fig, (axb, axl) = plt.subplots(
-        1, 2, figsize=(11.0, 3.6), dpi=200,
-        gridspec_kw={"width_ratios": [2.3, 3.9]}, facecolor=NAVY)
-    for ax in (axb, axl):
-        ax.set_facecolor(NAVY)
-    cats = [(GREEN, n_bull, "bullish", "看多"),
-            (REDX, n_bear, "bearish", "看空"),
-            (GRID, n_neut, "neutral", "中性/事件")]
-    tot = sum(v for _, v, _, _ in cats) or 1
-    axb.set_xlim(-0.62, 1.05)
-    axb.set_ylim(0, 1.3)
-    ys = [0.72, 0.48, 0.24]
-    for (c, v, _en, cn), y in zip(cats, ys):
-        axb.text(-0.04, y, cn, ha="right", va="center", color="#c9d6e2",
-                 fontsize=10.5)
-        axb.barh(y, max(v, 0) / tot * 0.9, color=c, height=0.16,
-                 edgecolor=NAVY, linewidth=1.0)
-        axb.text(max(v, 0) / tot * 0.9 + 0.03, y, str(v), ha="left",
-                 va="center", fontsize=11.5, fontweight="bold", color="white")
-    axb.axis("off")
-    axb.text(0.21, 0.05, f"{n_bull} bullish · {n_bear} bearish · {n_neut} flat",
-             ha="center", color="#8ab4c8", fontsize=8.5)
-    axb.set_title("今日立場分佈", color="white", fontsize=13,
-                  fontweight="bold", loc="left", pad=14)
-
-    axl.axis("off")
-    axl.text(0, 1.06, title or "財經影片今日重點", transform=axl.transAxes,
-             color="white", fontsize=14, fontweight="bold", va="top")
-    shown = items[:5]
-    step = 0.92 / max(len(shown), 1)
-    for idx, it in enumerate(shown):
-        if it.get("direction") == 1:
-            sym, col = "▲", GREEN
-        elif it.get("direction") == -1:
-            sym, col = "▼", REDX
+        b = _pulse_bucket(it)
+        if b in buckets:
+            buckets[b] += 1
         else:
-            sym, col = "◆", TEAL
-        who = it.get("channel") or ""
-        what = it.get("title") or it.get("verdict") or ""
-        lbl = _shorten(f"{who} — {what}" if who else what, 56)
-        axl.text(0, 0.90 - idx * step, f"{sym}  {lbl}",
-                 transform=axl.transAxes, color=col, fontsize=10.5, va="top")
-        if it.get("verdict"):
-            axl.text(0.012, 0.90 - idx * step - step * 0.42,
-                     _shorten(it["verdict"], 40), transform=axl.transAxes,
-                     color="#8ab4c8", fontsize=9, va="top")
-    if filedate:
-        axl.text(0, -0.10, f"◆ neutral/event · data {filedate}",
-                 transform=axl.transAxes, color="#8ab4c8", fontsize=8.5)
+            n_none += 1
+    total = sum(buckets.values()) + n_none or 1
+    labels = [b for b in _PULSE_BUCKETS]
+    counts = [buckets[b] for b in labels]
+    colors = [_PULSE_COLORS[b] for b in labels]
+    # Show parse failures as their own grey bucket: hiding 無立場 while keeping
+    # it in the denominator prints 2/6=33% next to an "n=4" title (live bug).
+    if n_none:
+        labels = labels + ["無立場"]
+        counts = counts + [n_none]
+        colors = colors + ["#9aa5b1"]
+
+    date = filedate or datetime.now().strftime("%Y-%m-%d")
+    n = sum(counts)
+
+    fig, ax = plt.subplots(figsize=(9.2, 3.4 + 0.3 * len(labels)), dpi=200,
+                           facecolor="#f7f9fb")
+    ax.set_facecolor("white")
+    y = list(range(len(labels)))
+    vals = [c / total * 100.0 for c in counts]
+    ax.barh(y, vals, color=colors, height=0.55, edgecolor="white", linewidth=1.0)
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels, fontsize=12, color="#1f2328")
+    ax.invert_yaxis()
+    ax.axvline(0, color="#333", linewidth=0.8)
+    ax.set_xlabel("佔比 %", fontsize=10, color="#57606a")
+    ax.grid(axis="x", alpha=0.25, linestyle=":")
+    for i, (c, v) in enumerate(zip(counts, vals)):
+        pct = f"{v:.0f}%"
+        ax.text(max(v, 1.0) + 0.5 if v >= 0 else 0, i, f"{c} ({pct})",
+                va="center", ha="left", fontsize=11, color="#1f2328")
+    ax.set_xlim(0, max(max(vals) * 1.45, 12))
+    for s in ("top", "right", "left"):
+        ax.spines[s].set_visible(False)
+    # Title via suptitle + subtitle via ax title: ax.text at 1.06 in axes
+    # coords collided with the title (garbled overlap in the delivered PNG).
+    fig.suptitle(f"影片立場分佈 — {date}（n={n}）", x=0.16, ha="left",
+                 fontsize=14, fontweight="bold", color="#1f2328")
+    ax.set_title("來源：當日影片 Desk Take 立場欄；中性偏多/偏空保留原分類",
+                 loc="left", fontsize=9, color="#57606a", pad=6)
+    fig.subplots_adjust(left=0.16, right=0.96, top=0.80, bottom=0.12)
 
     out = os.path.join(OUT_ROOT, "ytgem", f"chart_{stamp()}.png")
     os.makedirs(os.path.dirname(out), exist_ok=True)
@@ -577,6 +609,24 @@ def videos_notebook_context(items: list[dict], date_label: str = "") -> str:
         "bar or point with its value AND its period (e.g. '現在 12GW' / "
         "'2032 38GW'); use 環比 / 同比 for MoM / YoY; never list the same "
         "ticker twice in one line.\n"
+        "NUMBERS (strict): copy every digit, percentage, price, ratio and date "
+        "EXACTLY as written in the source text; never round, recompute, convert "
+        "currency, or restate an interval. Use half-width digits with narrow "
+        "punctuation (1.2 not 1,2; 6,640 not 6640 where the source uses a "
+        "thousands separator — follow the source). Use 同比 for YoY, 環比 for MoM.\n"
+        "ACRONYMS (strict): CPTPP (never CPP), USD/CNH (never USDCNH/CNHUSD), "
+        "index/ticker spellings exactly as sourced (S&P 500, ORCL, ZS, 3188.HK). "
+        "Where a Chinese rendering would be awkward, use the ticker alone.\n"
+        "HEADER STRIP: copy this line verbatim at the top:\n"
+        f"\"財經每日綜合簡報 — {date_label or 'DATE'} — {{n}} 影片 — 市場＋影片敘事摘要\"\n"
+        "CARDS: exactly 4 narrative cards (or fewer if fewer videos), each: "
+        "channel name, one Traditional Chinese headline (≤20字), 2 bullets "
+        "(tickers/numbers/policy names ONLY from the source), one '投資視角:' "
+        "line (the video's stated implication, ≤25字). Use up/down arrows ONLY "
+        "where the video itself states a direction.\n"
+        "STYLE: light background (#f7f9fb), navy #1e4e79 + teal #2e8b8b, red "
+        "only for cautions; large legible type, generous whitespace, wide "
+        "margins (no clipped text); landscape poster.\n"
         "Base every statement ONLY on the video summaries below — no "
         "invented tickers, prices, or claims. Flat vector, dark navy "
         "background, teal/amber accents, crisp Traditional Chinese text, "
