@@ -115,7 +115,9 @@ def _save_seen_videos(seen: dict[str, str]) -> None:
     now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(days=SEEN_PRUNE_DAYS)).isoformat()
     pruned = {vid: ts for vid, ts in seen.items() if ts >= cutoff}
-    os.makedirs(os.path.dirname(SEEN_FILE), exist_ok=True)
+    d = os.path.dirname(SEEN_FILE)
+    if d:
+        os.makedirs(d, exist_ok=True)
     with open(SEEN_FILE, "w") as f:
         json.dump(pruned, f, indent=2)
 
@@ -189,21 +191,41 @@ def load_channels(path: str) -> dict[str, str]:
 
 
 def parse_relative_time(text: str) -> Optional[datetime]:
+    """'3 hours ago' / '8h ago' / '1d ago' -> aware datetime. None if unparseable.
+
+    YouTube serves BOTH long forms ('10 hours ago', '2 weeks ago') and short
+    forms ('8h ago', '1d ago', '2w ago') on channel video grids, varying by
+    channel. A video whose time doesn't parse is silently dropped from the
+    digest — the no-miss guarantee requires both forms to parse.
+    """
     if not text:
         return None
     now = datetime.now(timezone.utc)
-    text = text.lower().replace("streamed ", "").replace("premiered ", "")
-    m = re.match(r"(\d+)\s*(minute|hour|day|week|month|year)s?\s*ago", text)
+    t = text.lower().replace("streamed ", "").replace("premiered ", "").strip()
+    m = re.match(r"(\d+)\s*([a-z]+)\s*ago$", t)
     if not m:
         return None
     n = int(m.group(1))
     unit = m.group(2)
+    if unit.endswith("s") and len(unit) > 1:
+        unit = unit[:-1]  # plural -> singular, but keep bare "s" (seconds)
+    unit = {
+        "sec": "second", "s": "second",
+        "min": "minute", "mins": "minute", "m": "minute",
+        "h": "hour", "hr": "hour", "hrs": "hour",
+        "d": "day",
+        "w": "week", "wk": "week", "wks": "week",
+        "mo": "month", "mon": "month", "mons": "month",
+        "y": "year", "yr": "year", "yrs": "year",
+    }.get(unit, unit)
     deltas = {
-        "minute": timedelta(minutes=n), "hour": timedelta(hours=n),
-        "day": timedelta(days=n), "week": timedelta(weeks=n),
-        "month": timedelta(days=n * 30), "year": timedelta(days=n * 365),
+        "second": timedelta(seconds=n), "minute": timedelta(minutes=n),
+        "hour": timedelta(hours=n), "day": timedelta(days=n),
+        "week": timedelta(weeks=n), "month": timedelta(days=n * 30),
+        "year": timedelta(days=n * 365),
     }
-    return now - deltas[unit]
+    delta = deltas.get(unit)
+    return now - delta if delta is not None else None
 
 
 def scrape_channel_videos(channel_ref: str, cutoff: datetime) -> list[dict]:
